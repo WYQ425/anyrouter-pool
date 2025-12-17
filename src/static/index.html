@@ -1,0 +1,1132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AnyRouter Keeper Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .fade-enter-active, .fade-leave-active { transition: opacity 0.3s ease; }
+        .fade-enter-from, .fade-leave-to { opacity: 0; }
+        .modal-enter-active, .modal-leave-active { transition: all 0.3s ease; }
+        .modal-enter-from, .modal-leave-to { opacity: 0; transform: scale(0.95); }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+    <div id="app">
+        <!-- Login Page -->
+        <div v-if="!isAuthenticated" class="min-h-screen flex items-center justify-center p-4">
+            <div class="w-full max-w-md">
+                <div class="bg-gray-800 rounded-2xl border border-gray-700 shadow-xl p-8">
+                    <!-- Logo -->
+                    <div class="text-center mb-8">
+                        <div class="w-16 h-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl flex items-center justify-center mx-auto mb-4">
+                            <svg class="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                        </div>
+                        <h1 class="text-2xl font-bold">AnyRouter Keeper</h1>
+                        <p class="text-gray-400 text-sm mt-1">管理员登录</p>
+                    </div>
+
+                    <!-- Login Form -->
+                    <form @submit.prevent="handleLogin" class="space-y-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-400 mb-2">用户名</label>
+                            <input v-model="loginForm.username" type="text" required
+                                placeholder="NewAPI 超级管理员用户名"
+                                class="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-400 mb-2">密码</label>
+                            <input v-model="loginForm.password" type="password" required
+                                placeholder="输入密码"
+                                class="w-full px-4 py-3 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition">
+                        </div>
+
+                        <div v-if="loginError" class="p-3 bg-red-500/20 border border-red-500/50 rounded-lg">
+                            <p class="text-red-400 text-sm">{{ loginError }}</p>
+                        </div>
+
+                        <button type="submit" :disabled="loading.login"
+                            class="w-full py-3 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center space-x-2">
+                            <svg v-if="loading.login" class="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            <span>{{ loading.login ? '登录中...' : '登录' }}</span>
+                        </button>
+                    </form>
+
+                    <div class="mt-6 pt-6 border-t border-gray-700">
+                        <p class="text-xs text-gray-500 text-center">
+                            使用 NewAPI (端口 13000) 的超级管理员账号登录
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Dashboard (After Login) -->
+        <div v-else>
+            <!-- Header -->
+            <header class="bg-gray-800 border-b border-gray-700 sticky top-0 z-10">
+                <div class="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
+                    <div class="flex items-center space-x-3">
+                        <div class="w-10 h-10 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
+                            <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path>
+                            </svg>
+                        </div>
+                        <div>
+                            <h1 class="text-xl font-bold">AnyRouter Keeper</h1>
+                            <p class="text-xs text-gray-400">Dashboard v1.3</p>
+                        </div>
+                    </div>
+                    <div class="flex items-center space-x-4">
+                        <span class="text-sm text-gray-400">{{ currentTime }}</span>
+                        <div class="flex items-center space-x-2 px-3 py-1.5 bg-gray-700 rounded-lg">
+                            <svg class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"></path>
+                            </svg>
+                            <span class="text-sm">{{ currentUser?.display_name || currentUser?.username }}</span>
+                            <span v-if="!dashboardAuthEnabled" class="text-xs text-yellow-400">(无认证)</span>
+                        </div>
+                        <button @click="refreshAll" :disabled="loading.dashboard"
+                            class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm flex items-center space-x-2 transition disabled:opacity-50">
+                            <svg class="w-4 h-4" :class="{ 'animate-spin': loading.dashboard }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                            </svg>
+                            <span>刷新</span>
+                        </button>
+                        <button v-if="dashboardAuthEnabled" @click="handleLogout"
+                            class="px-3 py-2 bg-red-600 hover:bg-red-700 rounded-lg text-sm flex items-center space-x-2 transition">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path>
+                            </svg>
+                            <span>登出</span>
+                        </button>
+                    </div>
+                </div>
+            </header>
+
+            <main class="max-w-7xl mx-auto px-4 py-6 space-y-6">
+                <!-- Tab Navigation -->
+                <div class="flex space-x-1 bg-gray-800 p-1 rounded-lg w-fit">
+                    <button @click="activeTab = 'dashboard'"
+                        :class="activeTab === 'dashboard' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'"
+                        class="px-4 py-2 rounded-md text-sm font-medium transition">
+                        概览
+                    </button>
+                    <button @click="activeTab = 'accounts'; fetchAccounts()"
+                        :class="activeTab === 'accounts' ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-white'"
+                        class="px-4 py-2 rounded-md text-sm font-medium transition">
+                        账号管理
+                    </button>
+                </div>
+
+                <!-- Dashboard Tab -->
+                <div v-show="activeTab === 'dashboard'">
+                    <!-- Status Cards -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                        <!-- Accounts Card -->
+                        <div class="bg-gray-800 rounded-xl p-5 border border-gray-700">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-400 text-sm">账号数量</p>
+                                    <p class="text-3xl font-bold mt-1">{{ dashboard.accounts || 0 }}</p>
+                                </div>
+                                <div class="w-12 h-12 bg-blue-500/20 rounded-lg flex items-center justify-center">
+                                    <svg class="w-6 h-6 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Balance Card -->
+                        <div class="bg-gray-800 rounded-xl p-5 border border-gray-700">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-400 text-sm">总余额</p>
+                                    <p class="text-3xl font-bold mt-1 text-green-400">${{ formatNumber(balanceSummary.remaining_usd || totalBalance) }}</p>
+                                    <p v-if="balanceSummary.usage_percent !== undefined" class="text-xs text-gray-500 mt-1">
+                                        已用 {{ balanceSummary.usage_percent }}%
+                                    </p>
+                                </div>
+                                <div class="w-12 h-12 bg-green-500/20 rounded-lg flex items-center justify-center">
+                                    <svg class="w-6 h-6 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- WAF Status Card -->
+                        <div class="bg-gray-800 rounded-xl p-5 border border-gray-700">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-400 text-sm">WAF Cookies</p>
+                                    <p class="text-xl font-semibold mt-1 flex items-center">
+                                        <span :class="dashboard.waf_cookies_valid ? 'text-green-400' : 'text-red-400'">
+                                            {{ dashboard.waf_cookies_valid ? '有效' : '已过期' }}
+                                        </span>
+                                        <span class="ml-2 w-2 h-2 rounded-full" :class="dashboard.waf_cookies_valid ? 'bg-green-400' : 'bg-red-400'"></span>
+                                    </p>
+                                </div>
+                                <button @click="refreshWaf" :disabled="loading.waf"
+                                    class="px-3 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition disabled:opacity-50">
+                                    {{ loading.waf ? '刷新中...' : '刷新' }}
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Checkin Status Card -->
+                        <div class="bg-gray-800 rounded-xl p-5 border border-gray-700">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-gray-400 text-sm">签到调度</p>
+                                    <p class="text-xl font-semibold mt-1 flex items-center">
+                                        <span :class="dashboard.checkin?.scheduler_running ? 'text-green-400' : 'text-yellow-400'">
+                                            {{ dashboard.checkin?.scheduler_running ? '运行中' : '已停止' }}
+                                        </span>
+                                        <span class="ml-2 w-2 h-2 rounded-full animate-pulse"
+                                            :class="dashboard.checkin?.scheduler_running ? 'bg-green-400' : 'bg-yellow-400'"></span>
+                                    </p>
+                                    <p class="text-xs text-gray-500 mt-1" v-if="dashboard.checkin?.next_run">
+                                        下次: {{ formatTime(dashboard.checkin.next_run) }}
+                                    </p>
+                                </div>
+                                <div class="w-12 h-12 bg-purple-500/20 rounded-lg flex items-center justify-center">
+                                    <svg class="w-6 h-6 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    </svg>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Main Content Grid -->
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <!-- Balance List -->
+                        <div class="lg:col-span-2 bg-gray-800 rounded-xl border border-gray-700">
+                            <div class="p-5 border-b border-gray-700 flex items-center justify-between">
+                                <div>
+                                    <h2 class="text-lg font-semibold flex items-center">
+                                        <svg class="w-5 h-5 mr-2 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"></path>
+                                        </svg>
+                                        账号余额
+                                        <span v-if="healthStats" class="ml-3 flex items-center space-x-2 text-xs font-normal">
+                                            <span class="flex items-center"><span class="w-2 h-2 rounded-full bg-green-400 mr-1"></span>{{ healthStats.healthy || 0 }}</span>
+                                            <span class="flex items-center"><span class="w-2 h-2 rounded-full bg-yellow-400 mr-1"></span>{{ healthStats.warning || 0 }}</span>
+                                            <span class="flex items-center"><span class="w-2 h-2 rounded-full bg-red-400 mr-1"></span>{{ healthStats.error || 0 }}</span>
+                                        </span>
+                                    </h2>
+                                    <p v-if="balanceLastUpdated" class="text-xs text-gray-500 mt-1">
+                                        {{ balanceDataSource }} · 更新于 {{ formatTime(balanceLastUpdated) }}
+                                    </p>
+                                </div>
+                                <button @click="fetchBalances" :disabled="loading.balance"
+                                    class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition disabled:opacity-50">
+                                    {{ loading.balance ? '加载中...' : '刷新余额' }}
+                                </button>
+                            </div>
+                            <div class="p-5">
+                                <div v-if="balances.length === 0" class="text-center py-8 text-gray-500">
+                                    <p>暂无余额数据</p>
+                                    <button @click="fetchBalances" class="mt-2 text-blue-400 hover:underline">点击加载</button>
+                                </div>
+                                <div v-else class="space-y-3 max-h-[500px] overflow-y-auto">
+                                    <div v-for="(account, index) in balances" :key="index"
+                                        class="p-3 bg-gray-700/50 rounded-lg hover:bg-gray-700 transition"
+                                        :class="{ 'opacity-60': account.status === 'pending' }">
+                                        <div class="flex items-center justify-between mb-2">
+                                            <div class="flex items-center space-x-3">
+                                                <div class="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
+                                                    :class="getHealthBgClass(account.health?.level)">
+                                                    {{ index + 1 }}
+                                                </div>
+                                                <div>
+                                                    <div class="flex items-center space-x-2">
+                                                        <p class="font-medium">{{ getAccountName(account) }}</p>
+                                                        <span v-if="account.health"
+                                                            class="px-1.5 py-0.5 rounded text-xs font-medium"
+                                                            :class="getHealthBadgeClass(account.health.level)">
+                                                            {{ getHealthLabel(account.health.level) }}
+                                                        </span>
+                                                    </div>
+                                                    <p class="text-xs text-gray-400">ID: {{ getAccountId(account) }}</p>
+                                                </div>
+                                            </div>
+                                            <div class="text-right">
+                                                <p v-if="account.status === 'pending'" class="text-sm text-yellow-400">待同步</p>
+                                                <template v-else>
+                                                    <p class="font-semibold" :class="account.remaining_usd > 100 ? 'text-green-400' : account.remaining_usd > 20 ? 'text-yellow-400' : 'text-red-400'">
+                                                        ${{ formatNumber(account.remaining_usd || getQuotaUsd(account)) }}
+                                                    </p>
+                                                    <p class="text-xs text-gray-400">已用: ${{ formatNumber(account.used_usd || getUsedUsd(account)) }}</p>
+                                                </template>
+                                            </div>
+                                        </div>
+                                        <!-- Progress Bar -->
+                                        <div v-if="account.status !== 'pending' && account.usage_percent !== undefined" class="mt-2">
+                                            <div class="h-1.5 bg-gray-600 rounded-full overflow-hidden">
+                                                <div class="h-full rounded-full transition-all"
+                                                    :class="account.usage_percent < 50 ? 'bg-green-500' : account.usage_percent < 80 ? 'bg-yellow-500' : 'bg-red-500'"
+                                                    :style="{ width: account.usage_percent + '%' }"></div>
+                                            </div>
+                                            <p class="text-xs text-gray-500 mt-1">已用 {{ account.usage_percent }}%</p>
+                                        </div>
+                                        <!-- Health Issues -->
+                                        <div v-if="account.health?.issues?.length > 0" class="mt-2 space-y-1">
+                                            <p v-for="(issue, i) in account.health.issues" :key="i"
+                                                class="text-xs px-2 py-1 rounded bg-red-500/10 text-red-400 flex items-center">
+                                                <svg class="w-3 h-3 mr-1 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+                                                </svg>
+                                                {{ issue }}
+                                            </p>
+                                        </div>
+                                        <!-- Health Indicators -->
+                                        <div v-if="account.health && account.status !== 'pending'" class="mt-2 flex items-center space-x-3 text-xs">
+                                            <span class="flex items-center" :class="account.health.has_session ? 'text-green-400' : 'text-gray-500'">
+                                                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 7a2 2 0 012 2m4 0a6 6 0 01-7.743 5.743L11 17H9v2H7v2H4a1 1 0 01-1-1v-2.586a1 1 0 01.293-.707l5.964-5.964A6 6 0 1121 9z"></path>
+                                                </svg>
+                                                Session
+                                            </span>
+                                            <span class="flex items-center" :class="account.health.has_api_key ? 'text-green-400' : 'text-gray-500'">
+                                                <svg class="w-3 h-3 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"></path>
+                                                </svg>
+                                                API Key
+                                            </span>
+                                            <span v-if="account.health.last_checkin_time" class="text-gray-500">
+                                                签到: {{ formatTime(account.health.last_checkin_time) }}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Checkin Panel -->
+                        <div class="bg-gray-800 rounded-xl border border-gray-700">
+                            <div class="p-5 border-b border-gray-700">
+                                <h2 class="text-lg font-semibold flex items-center">
+                                    <svg class="w-5 h-5 mr-2 text-purple-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+                                    </svg>
+                                    签到管理
+                                </h2>
+                            </div>
+                            <div class="p-5 space-y-4">
+                                <button @click="triggerCheckin" :disabled="loading.checkin"
+                                    class="w-full py-3 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 rounded-lg font-medium transition disabled:opacity-50 flex items-center justify-center space-x-2">
+                                    <svg v-if="loading.checkin" class="w-5 h-5 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+                                    </svg>
+                                    <svg v-else class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                                    </svg>
+                                    <span>{{ loading.checkin ? '签到中...' : '立即签到' }}</span>
+                                </button>
+
+                                <div class="bg-gray-700/50 rounded-lg p-4 space-y-2">
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-gray-400">执行时间</span>
+                                        <span>{{ dashboard.checkin?.schedule || '每天 8:30' }}</span>
+                                    </div>
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-gray-400">上次签到</span>
+                                        <span>{{ checkinStatus.last_run ? formatTime(checkinStatus.last_run) : '从未' }}</span>
+                                    </div>
+                                    <div class="flex justify-between text-sm">
+                                        <span class="text-gray-400">成功/失败</span>
+                                        <span>
+                                            <span class="text-green-400">{{ checkinStatus.total_success || 0 }}</span>
+                                            /
+                                            <span class="text-red-400">{{ checkinStatus.total_failed || 0 }}</span>
+                                        </span>
+                                    </div>
+                                </div>
+
+                                <div v-if="checkinStatus.results && checkinStatus.results.length > 0">
+                                    <h3 class="text-sm font-medium text-gray-400 mb-2">最近签到结果 ({{ checkinStatus.results.length }})</h3>
+                                    <div class="space-y-1 max-h-64 overflow-y-auto">
+                                        <div v-for="(result, index) in checkinStatus.results" :key="index"
+                                            class="py-2 px-2 text-sm rounded"
+                                            :class="result.success ? 'bg-green-500/10' : 'bg-red-500/10'">
+                                            <div class="flex items-center justify-between">
+                                                <span class="truncate font-medium">{{ result.account }}</span>
+                                                <span :class="result.success ? 'text-green-400' : 'text-red-400'">
+                                                    {{ result.success ? '成功' : '失败' }}
+                                                </span>
+                                            </div>
+                                            <p v-if="result.message && !result.success" class="text-xs text-red-400 mt-1 truncate" :title="result.message">
+                                                {{ result.message }}
+                                            </p>
+                                            <p v-else-if="result.checkin_message" class="text-xs text-gray-500 mt-1 truncate">
+                                                {{ result.checkin_message }}
+                                            </p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Accounts Tab -->
+                <div v-show="activeTab === 'accounts'">
+                    <div class="bg-gray-800 rounded-xl border border-gray-700">
+                        <div class="p-5 border-b border-gray-700 flex items-center justify-between">
+                            <h2 class="text-lg font-semibold flex items-center">
+                                <svg class="w-5 h-5 mr-2 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                </svg>
+                                账号管理
+                                <span class="ml-2 text-sm text-gray-400">({{ accountsList.length }} 个账号)</span>
+                            </h2>
+                            <div class="flex space-x-2">
+                                <button @click="fetchAccounts" :disabled="loading.accounts"
+                                    class="px-3 py-1.5 bg-gray-700 hover:bg-gray-600 rounded-lg text-sm transition disabled:opacity-50">
+                                    {{ loading.accounts ? '加载中...' : '刷新' }}
+                                </button>
+                                <button @click="openAddModal"
+                                    class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded-lg text-sm transition flex items-center space-x-1">
+                                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+                                    </svg>
+                                    <span>添加账号</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="p-5">
+                            <div v-if="accountsList.length === 0" class="text-center py-12 text-gray-500">
+                                <svg class="w-16 h-16 mx-auto mb-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                </svg>
+                                <p>暂无账号</p>
+                                <button @click="openAddModal" class="mt-2 text-blue-400 hover:underline">添加第一个账号</button>
+                            </div>
+                            <div v-else class="overflow-x-auto">
+                                <table class="w-full">
+                                    <thead>
+                                        <tr class="text-left text-gray-400 text-sm border-b border-gray-700">
+                                            <th class="pb-3 font-medium">名称</th>
+                                            <th class="pb-3 font-medium">API User</th>
+                                            <th class="pb-3 font-medium">状态</th>
+                                            <th class="pb-3 font-medium">Session</th>
+                                            <th class="pb-3 font-medium">API Key</th>
+                                            <th class="pb-3 font-medium text-right">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y divide-gray-700">
+                                        <tr v-for="account in accountsList" :key="account.name" class="hover:bg-gray-700/50">
+                                            <td class="py-3">
+                                                <span class="font-medium">{{ account.name }}</span>
+                                            </td>
+                                            <td class="py-3 text-gray-400">{{ account.api_user }}</td>
+                                            <td class="py-3">
+                                                <span :class="account.enabled ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'"
+                                                    class="px-2 py-1 rounded-full text-xs font-medium">
+                                                    {{ account.enabled ? '启用' : '禁用' }}
+                                                </span>
+                                            </td>
+                                            <td class="py-3">
+                                                <div class="flex items-center space-x-1">
+                                                    <span :class="account.has_session ? 'text-green-400' : 'text-red-400'" class="text-sm">
+                                                        {{ account.has_session ? '已配置' : '未配置' }}
+                                                    </span>
+                                                    <span v-if="account.has_session && account.session_warning"
+                                                        class="text-xs text-yellow-400" title="Session 可能已过期">
+                                                        ⚠️
+                                                    </span>
+                                                </div>
+                                            </td>
+                                            <td class="py-3">
+                                                <span :class="account.has_api_key ? 'text-green-400' : 'text-yellow-400'" class="text-sm">
+                                                    {{ account.has_api_key ? '已配置' : '未配置' }}
+                                                </span>
+                                                <p v-if="!account.has_api_key" class="text-xs text-gray-500">无法用于 API 代理</p>
+                                            </td>
+                                            <td class="py-3 text-right">
+                                                <div class="flex items-center justify-end space-x-2">
+                                                    <button @click="toggleAccount(account.name)"
+                                                        :title="account.enabled ? '禁用' : '启用'"
+                                                        class="p-1.5 rounded hover:bg-gray-600 transition">
+                                                        <svg v-if="account.enabled" class="w-4 h-4 text-green-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path>
+                                                        </svg>
+                                                        <svg v-else class="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"></path>
+                                                        </svg>
+                                                    </button>
+                                                    <button @click="openEditModal(account.name)"
+                                                        title="编辑"
+                                                        class="p-1.5 rounded hover:bg-gray-600 transition">
+                                                        <svg class="w-4 h-4 text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"></path>
+                                                        </svg>
+                                                    </button>
+                                                    <button @click="confirmDelete(account.name)"
+                                                        title="删除"
+                                                        class="p-1.5 rounded hover:bg-gray-600 transition">
+                                                        <svg class="w-4 h-4 text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path>
+                                                        </svg>
+                                                    </button>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </main>
+
+            <!-- Account Modal -->
+            <transition name="modal">
+                <div v-if="modal.show" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" @click.self="closeModal">
+                    <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-lg shadow-xl">
+                        <div class="p-5 border-b border-gray-700 flex items-center justify-between">
+                            <h3 class="text-lg font-semibold">{{ modal.mode === 'add' ? '添加账号' : '编辑账号' }}</h3>
+                            <button @click="closeModal" class="p-1 hover:bg-gray-700 rounded transition">
+                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                                </svg>
+                            </button>
+                        </div>
+                        <div class="p-5 space-y-4">
+                            <div>
+                                <label class="block text-sm font-medium text-gray-400 mb-1">名称 *</label>
+                                <input v-model="modal.form.name" type="text" placeholder="例如: DTW-1"
+                                    class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500"
+                                    :disabled="modal.mode === 'edit'">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-400 mb-1">API User *</label>
+                                <input v-model="modal.form.api_user" type="text" placeholder="例如: 79541"
+                                    class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500">
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-400 mb-1">Session Cookie *</label>
+                                <textarea v-model="modal.form.session_cookie" rows="3" placeholder="从浏览器复制的 session cookie"
+                                    class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500 font-mono text-sm"></textarea>
+                            </div>
+                            <div>
+                                <label class="block text-sm font-medium text-gray-400 mb-1">API Key (可选)</label>
+                                <input v-model="modal.form.api_key" type="text" placeholder="sk-..."
+                                    class="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg focus:outline-none focus:border-blue-500 font-mono text-sm">
+                            </div>
+                            <div class="flex items-center space-x-2">
+                                <input v-model="modal.form.enabled" type="checkbox" id="enabled" class="w-4 h-4 rounded">
+                                <label for="enabled" class="text-sm text-gray-400">启用账号</label>
+                            </div>
+                        </div>
+                        <div class="p-5 border-t border-gray-700 flex justify-end space-x-3">
+                            <button @click="closeModal" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition">
+                                取消
+                            </button>
+                            <button @click="saveAccount" :disabled="loading.saving"
+                                class="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition disabled:opacity-50">
+                                {{ loading.saving ? '保存中...' : '保存' }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </transition>
+
+            <!-- Delete Confirmation Modal -->
+            <transition name="modal">
+                <div v-if="deleteModal.show" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50" @click.self="deleteModal.show = false">
+                    <div class="bg-gray-800 rounded-xl border border-gray-700 w-full max-w-md shadow-xl">
+                        <div class="p-5 border-b border-gray-700">
+                            <h3 class="text-lg font-semibold text-red-400">确认删除</h3>
+                        </div>
+                        <div class="p-5">
+                            <p class="text-gray-300">确定要删除账号 <span class="font-semibold text-white">{{ deleteModal.name }}</span> 吗？</p>
+                            <p class="text-sm text-gray-500 mt-2">此操作不可恢复</p>
+                        </div>
+                        <div class="p-5 border-t border-gray-700 flex justify-end space-x-3">
+                            <button @click="deleteModal.show = false" class="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg transition">
+                                取消
+                            </button>
+                            <button @click="deleteAccount" :disabled="loading.deleting"
+                                class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded-lg transition disabled:opacity-50">
+                                {{ loading.deleting ? '删除中...' : '删除' }}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </transition>
+
+            <!-- Footer -->
+            <footer class="border-t border-gray-800 mt-8 py-4 text-center text-sm text-gray-500">
+                <p>AnyRouter Keeper Dashboard &copy; 2025</p>
+            </footer>
+        </div>
+
+        <!-- Toast Notification -->
+        <transition name="fade">
+            <div v-if="toast.show"
+                class="fixed bottom-6 right-6 px-6 py-3 rounded-lg shadow-lg flex items-center space-x-2 z-50"
+                :class="toast.type === 'success' ? 'bg-green-600' : toast.type === 'error' ? 'bg-red-600' : 'bg-blue-600'">
+                <svg v-if="toast.type === 'success'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"></path>
+                </svg>
+                <svg v-else-if="toast.type === 'error'" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path>
+                </svg>
+                <span>{{ toast.message }}</span>
+            </div>
+        </transition>
+    </div>
+
+    <script>
+    const { createApp, ref, reactive, computed, onMounted, onUnmounted, watch } = Vue;
+
+    createApp({
+        setup() {
+            // Auth State
+            const isAuthenticated = ref(false);
+            const currentUser = ref(null);
+            const authToken = ref(null);
+            const loginForm = reactive({ username: '', password: '' });
+            const loginError = ref('');
+            const dashboardAuthEnabled = ref(true);  // Dashboard 认证是否启用
+
+            // State
+            const activeTab = ref('dashboard');
+            const dashboard = ref({});
+            const balances = ref([]);
+            const balanceSummary = ref({});
+            const balanceLastUpdated = ref(null);
+            const balanceDataSource = ref('');
+            const healthStats = ref(null);
+            const checkinStatus = ref({});
+            const accountsList = ref([]);
+            const currentTime = ref('');
+            const loading = reactive({
+                login: false,
+                dashboard: false,
+                balance: false,
+                checkin: false,
+                waf: false,
+                accounts: false,
+                saving: false,
+                deleting: false
+            });
+            const toast = reactive({ show: false, message: '', type: 'info' });
+            const modal = reactive({
+                show: false,
+                mode: 'add',
+                form: { name: '', api_user: '', session_cookie: '', api_key: '', enabled: true }
+            });
+            const deleteModal = reactive({ show: false, name: '' });
+
+            // Token management
+            const saveToken = (token) => {
+                authToken.value = token;
+                localStorage.setItem('keeper_token', token);
+            };
+
+            const loadToken = () => {
+                const token = localStorage.getItem('keeper_token');
+                if (token) {
+                    authToken.value = token;
+                    return token;
+                }
+                return null;
+            };
+
+            const clearToken = () => {
+                authToken.value = null;
+                localStorage.removeItem('keeper_token');
+            };
+
+            // API helper with auth
+            const authFetch = async (url, options = {}) => {
+                const headers = {
+                    'Content-Type': 'application/json',
+                    ...options.headers
+                };
+                if (authToken.value) {
+                    headers['Authorization'] = `Bearer ${authToken.value}`;
+                }
+                const response = await fetch(url, { ...options, headers });
+
+                // Handle 401 errors
+                if (response.status === 401) {
+                    clearToken();
+                    isAuthenticated.value = false;
+                    currentUser.value = null;
+                    throw new Error('Session expired');
+                }
+
+                return response;
+            };
+
+            // Auth methods
+            const checkAuthStatus = async () => {
+                // 首先检查 Dashboard 认证是否启用
+                try {
+                    const healthRes = await fetch('/health');
+                    const healthData = await healthRes.json();
+                    if (healthData.dashboard_auth) {
+                        dashboardAuthEnabled.value = healthData.dashboard_auth.enabled;
+                    }
+                } catch (e) {
+                    console.error('Failed to fetch health:', e);
+                }
+
+                // 如果 Dashboard 认证被禁用，直接设为已认证
+                if (!dashboardAuthEnabled.value) {
+                    isAuthenticated.value = true;
+                    currentUser.value = { username: 'Guest', display_name: '访客模式' };
+                    return;
+                }
+
+                // 正常的认证检查
+                const token = loadToken();
+                if (!token) {
+                    isAuthenticated.value = false;
+                    return;
+                }
+
+                try {
+                    const res = await authFetch('/auth/me');
+                    if (res.ok) {
+                        const data = await res.json();
+                        if (data.success) {
+                            isAuthenticated.value = true;
+                            currentUser.value = data.data;
+                            return;
+                        }
+                    }
+                } catch (e) {
+                    console.error('Auth check failed:', e);
+                }
+
+                clearToken();
+                isAuthenticated.value = false;
+            };
+
+            const handleLogin = async () => {
+                loginError.value = '';
+                loading.login = true;
+
+                try {
+                    const res = await fetch('/auth/login', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            username: loginForm.username,
+                            password: loginForm.password
+                        })
+                    });
+
+                    const data = await res.json();
+
+                    if (res.ok && data.success) {
+                        saveToken(data.data.token);
+                        currentUser.value = data.data.user;
+                        isAuthenticated.value = true;
+                        loginForm.username = '';
+                        loginForm.password = '';
+                        showToast('登录成功', 'success');
+
+                        // Load dashboard data
+                        fetchDashboard();
+                        fetchCheckinStatus();
+                        fetchBalances();
+                    } else {
+                        loginError.value = data.detail || '登录失败，请检查用户名和密码';
+                    }
+                } catch (e) {
+                    loginError.value = '网络错误，请稍后重试';
+                    console.error('Login error:', e);
+                } finally {
+                    loading.login = false;
+                }
+            };
+
+            const handleLogout = async () => {
+                try {
+                    await authFetch('/auth/logout', { method: 'POST' });
+                } catch (e) {
+                    console.error('Logout error:', e);
+                }
+
+                clearToken();
+                isAuthenticated.value = false;
+                currentUser.value = null;
+                showToast('已登出', 'info');
+            };
+
+            // Helper functions
+            const getAccountName = (account) => account.name || account.account || 'Unknown';
+            const getAccountId = (account) => account.username || account.api_user || '-';
+            const getQuotaUsd = (account) => account.quota_usd !== undefined ? account.quota_usd : (account.quota || 0);
+            const getUsedUsd = (account) => account.used_usd !== undefined ? account.used_usd : (account.used_quota || 0);
+
+            // Health status helper functions
+            const getHealthBgClass = (level) => {
+                switch(level) {
+                    case 'healthy': return 'bg-gradient-to-br from-green-500 to-green-600';
+                    case 'warning': return 'bg-gradient-to-br from-yellow-500 to-yellow-600';
+                    case 'error': return 'bg-gradient-to-br from-red-500 to-red-600';
+                    default: return 'bg-gradient-to-br from-gray-500 to-gray-600';
+                }
+            };
+
+            const getHealthBadgeClass = (level) => {
+                switch(level) {
+                    case 'healthy': return 'bg-green-500/20 text-green-400';
+                    case 'warning': return 'bg-yellow-500/20 text-yellow-400';
+                    case 'error': return 'bg-red-500/20 text-red-400';
+                    default: return 'bg-gray-500/20 text-gray-400';
+                }
+            };
+
+            const getHealthLabel = (level) => {
+                switch(level) {
+                    case 'healthy': return '健康';
+                    case 'warning': return '警告';
+                    case 'error': return '异常';
+                    default: return '未知';
+                }
+            };
+
+            // Computed
+            const totalBalance = computed(() => {
+                if (balances.value.length === 0) return 0;
+                return balances.value.reduce((sum, acc) => sum + getQuotaUsd(acc), 0);
+            });
+
+            // Methods
+            const showToast = (message, type = 'info') => {
+                toast.message = message;
+                toast.type = type;
+                toast.show = true;
+                setTimeout(() => { toast.show = false; }, 3000);
+            };
+
+            const formatNumber = (num) => {
+                if (num === null || num === undefined) return '0.00';
+                return Number(num).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            };
+
+            const formatTime = (isoString) => {
+                if (!isoString) return '-';
+                const date = new Date(isoString);
+                return date.toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+            };
+
+            const updateTime = () => {
+                currentTime.value = new Date().toLocaleString('zh-CN', {
+                    year: 'numeric', month: '2-digit', day: '2-digit',
+                    hour: '2-digit', minute: '2-digit', second: '2-digit'
+                });
+            };
+
+            const fetchDashboard = async () => {
+                loading.dashboard = true;
+                try {
+                    const res = await fetch('/health');
+                    dashboard.value = await res.json();
+                } catch (e) {
+                    showToast('获取状态失败', 'error');
+                } finally {
+                    loading.dashboard = false;
+                }
+            };
+
+            const fetchBalances = async () => {
+                loading.balance = true;
+                try {
+                    const res = await authFetch('/balance/detail');
+                    const data = await res.json();
+                    if (data.success && data.data?.accounts) {
+                        balances.value = data.data.accounts;
+                        // Update summary data
+                        if (data.data.summary) {
+                            balanceSummary.value = data.data.summary;
+                            healthStats.value = data.data.summary.health_stats;
+                        }
+                        // Update metadata
+                        balanceLastUpdated.value = data.data.last_updated;
+                        balanceDataSource.value = data.data.data_source || '签到同步';
+                        showToast('余额数据已更新（来自最后一次签到）', 'success');
+                    }
+                } catch (e) {
+                    if (e.message !== 'Session expired') {
+                        showToast('获取余额失败', 'error');
+                    }
+                } finally {
+                    loading.balance = false;
+                }
+            };
+
+            const fetchCheckinStatus = async () => {
+                try {
+                    const res = await authFetch('/checkin');
+                    const data = await res.json();
+                    if (data.success) checkinStatus.value = data.data;
+                } catch (e) {
+                    console.error('Failed to fetch checkin status:', e);
+                }
+            };
+
+            const fetchAccounts = async () => {
+                loading.accounts = true;
+                try {
+                    const res = await authFetch('/accounts');
+                    const data = await res.json();
+                    if (data.success && data.data?.accounts) {
+                        accountsList.value = data.data.accounts;
+                    }
+                } catch (e) {
+                    if (e.message !== 'Session expired') {
+                        showToast('获取账号列表失败', 'error');
+                    }
+                } finally {
+                    loading.accounts = false;
+                }
+            };
+
+            const triggerCheckin = async () => {
+                loading.checkin = true;
+                showToast('签到已开始，请稍候...', 'info');
+                try {
+                    const res = await authFetch('/checkin/sync', { method: 'POST' });
+                    const data = await res.json();
+                    if (data.success) {
+                        const result = data.data;
+                        showToast(`签到完成: ${result.success_count}/${result.total_accounts} 成功`, 'success');
+                        checkinStatus.value = {
+                            last_run: result.start_time,
+                            total_success: result.success_count,
+                            total_failed: result.failed_count,
+                            results: result.results
+                        };
+                        if (result.results) balances.value = result.results;
+                    } else {
+                        showToast('签到失败: ' + (data.data?.message || '未知错误'), 'error');
+                    }
+                } catch (e) {
+                    if (e.message !== 'Session expired') {
+                        showToast('签到请求失败', 'error');
+                    }
+                } finally {
+                    loading.checkin = false;
+                    fetchDashboard();
+                }
+            };
+
+            const refreshWaf = async () => {
+                loading.waf = true;
+                try {
+                    const res = await authFetch('/refresh-waf', { method: 'POST' });
+                    const data = await res.json();
+                    if (data.status === 'ok') {
+                        showToast('WAF Cookies 已刷新', 'success');
+                        fetchDashboard();
+                    } else {
+                        showToast('WAF 刷新失败', 'error');
+                    }
+                } catch (e) {
+                    if (e.message !== 'Session expired') {
+                        showToast('WAF 刷新请求失败', 'error');
+                    }
+                } finally {
+                    loading.waf = false;
+                }
+            };
+
+            const refreshAll = () => {
+                fetchDashboard();
+                fetchCheckinStatus();
+                if (activeTab.value === 'accounts') fetchAccounts();
+            };
+
+            // Account management
+            const openAddModal = () => {
+                modal.mode = 'add';
+                modal.form = { name: '', api_user: '', session_cookie: '', api_key: '', enabled: true };
+                modal.show = true;
+            };
+
+            const openEditModal = async (name) => {
+                try {
+                    const res = await authFetch(`/accounts/${encodeURIComponent(name)}`);
+                    const data = await res.json();
+                    if (data.success) {
+                        modal.mode = 'edit';
+                        modal.form = {
+                            name: data.data.name,
+                            api_user: data.data.api_user,
+                            session_cookie: '',
+                            api_key: '',
+                            enabled: data.data.enabled
+                        };
+                        modal.show = true;
+                    }
+                } catch (e) {
+                    if (e.message !== 'Session expired') {
+                        showToast('获取账号信息失败', 'error');
+                    }
+                }
+            };
+
+            const closeModal = () => {
+                modal.show = false;
+            };
+
+            const saveAccount = async () => {
+                if (!modal.form.name || !modal.form.api_user) {
+                    showToast('请填写必填字段', 'error');
+                    return;
+                }
+                if (modal.mode === 'add' && !modal.form.session_cookie) {
+                    showToast('请填写 Session Cookie', 'error');
+                    return;
+                }
+
+                loading.saving = true;
+                try {
+                    const url = modal.mode === 'add' ? '/accounts' : `/accounts/${encodeURIComponent(modal.form.name)}`;
+                    const method = modal.mode === 'add' ? 'POST' : 'PUT';
+
+                    const body = modal.mode === 'add' ? {
+                        name: modal.form.name,
+                        api_user: modal.form.api_user,
+                        session_cookie: modal.form.session_cookie,
+                        api_key: modal.form.api_key,
+                        enabled: modal.form.enabled
+                    } : {};
+
+                    if (modal.mode === 'edit') {
+                        if (modal.form.api_user) body.api_user = modal.form.api_user;
+                        if (modal.form.session_cookie) body.session_cookie = modal.form.session_cookie;
+                        if (modal.form.api_key) body.api_key = modal.form.api_key;
+                        body.enabled = modal.form.enabled;
+                    }
+
+                    const res = await authFetch(url, {
+                        method,
+                        body: JSON.stringify(body)
+                    });
+                    const data = await res.json();
+
+                    if (data.success) {
+                        showToast(modal.mode === 'add' ? '账号添加成功' : '账号更新成功', 'success');
+                        closeModal();
+                        fetchAccounts();
+                        fetchDashboard();
+                    } else {
+                        showToast(data.detail || '操作失败', 'error');
+                    }
+                } catch (e) {
+                    if (e.message !== 'Session expired') {
+                        showToast('请求失败', 'error');
+                    }
+                } finally {
+                    loading.saving = false;
+                }
+            };
+
+            const toggleAccount = async (name) => {
+                try {
+                    const res = await authFetch(`/accounts/${encodeURIComponent(name)}/toggle`, { method: 'POST' });
+                    const data = await res.json();
+                    if (data.success) {
+                        showToast(data.message, 'success');
+                        fetchAccounts();
+                        fetchDashboard();
+                    } else {
+                        showToast(data.detail || '操作失败', 'error');
+                    }
+                } catch (e) {
+                    if (e.message !== 'Session expired') {
+                        showToast('请求失败', 'error');
+                    }
+                }
+            };
+
+            const confirmDelete = (name) => {
+                deleteModal.name = name;
+                deleteModal.show = true;
+            };
+
+            const deleteAccount = async () => {
+                loading.deleting = true;
+                try {
+                    const res = await authFetch(`/accounts/${encodeURIComponent(deleteModal.name)}`, { method: 'DELETE' });
+                    const data = await res.json();
+                    if (data.success) {
+                        showToast('账号已删除', 'success');
+                        deleteModal.show = false;
+                        fetchAccounts();
+                        fetchDashboard();
+                    } else {
+                        showToast(data.detail || '删除失败', 'error');
+                    }
+                } catch (e) {
+                    if (e.message !== 'Session expired') {
+                        showToast('请求失败', 'error');
+                    }
+                } finally {
+                    loading.deleting = false;
+                }
+            };
+
+            // Lifecycle
+            let timeInterval;
+            onMounted(async () => {
+                updateTime();
+                timeInterval = setInterval(updateTime, 1000);
+
+                // Check auth status first
+                await checkAuthStatus();
+
+                // If authenticated, load data
+                if (isAuthenticated.value) {
+                    fetchDashboard();
+                    fetchCheckinStatus();
+                    fetchBalances();
+                }
+            });
+
+            onUnmounted(() => {
+                clearInterval(timeInterval);
+            });
+
+            return {
+                // Auth
+                isAuthenticated, currentUser, loginForm, loginError, dashboardAuthEnabled,
+                handleLogin, handleLogout,
+                // State
+                activeTab, dashboard, balances, balanceSummary, balanceLastUpdated, balanceDataSource,
+                healthStats, checkinStatus, accountsList, currentTime,
+                loading, toast, modal, deleteModal, totalBalance,
+                // Methods
+                formatNumber, formatTime,
+                getAccountName, getAccountId, getQuotaUsd, getUsedUsd,
+                getHealthBgClass, getHealthBadgeClass, getHealthLabel,
+                fetchDashboard, fetchBalances, fetchAccounts, triggerCheckin, refreshWaf, refreshAll,
+                openAddModal, openEditModal, closeModal, saveAccount,
+                toggleAccount, confirmDelete, deleteAccount
+            };
+        }
+    }).mount('#app');
+    </script>
+</body>
+</html>

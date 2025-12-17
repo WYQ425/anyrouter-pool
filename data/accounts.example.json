@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Account_01",
+    "provider": "anyrouter",
+    "api_user": "12345",
+    "api_key": "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+    "cookies": {
+      "session": "your_session_cookie_value"
+    },
+    "enabled": true
+  },
+  {
+    "name": "Account_02",
+    "provider": "anyrouter",
+    "api_user": "67890",
+    "api_key": "sk-yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+    "cookies": {
+      "session": "another_session_cookie_value"
+    },
+    "enabled": true
+  }
+]

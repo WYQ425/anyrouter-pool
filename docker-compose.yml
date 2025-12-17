@@ -1,0 +1,55 @@
+# AnyRouter Pool - Docker Compose 配置
+#
+# 使用方法:
+#   1. 复制 .env.example 为 .env 并修改配置
+#   2. 复制 data/accounts.example.json 为 data/accounts.json 并配置账号
+#   3. 运行: docker compose up -d
+
+services:
+  # ============================================
+  # AnyRouter Pool - 账号池管理服务
+  # ============================================
+  anyrouter-pool:
+    build:
+      context: ./src
+      dockerfile: Dockerfile
+      args:
+        # 构建时代理（用于 pip install）
+        - HTTP_PROXY=http://${PROXY_HOST:-172.17.0.1}:${PROXY_PORT:-7890}
+        - HTTPS_PROXY=http://${PROXY_HOST:-172.17.0.1}:${PROXY_PORT:-7890}
+    image: anyrouter-pool:latest
+    container_name: anyrouter-pool
+    restart: always
+    ports:
+      - "${POOL_PORT:-18081}:18081"
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - ANYROUTER_BASE_URL=https://anyrouter.top
+      - ACCOUNTS_FILE=/app/data/accounts.json
+      - BALANCES_FILE=/app/data/balances.json
+      - WAF_PROXY_PORT=18081
+      # 签到配置
+      - CHECKIN_ENABLED=${CHECKIN_ENABLED:-true}
+      - CHECKIN_CRON_HOUR=${CHECKIN_CRON_HOUR:-2,8,14,20}
+      - CHECKIN_CRON_MINUTE=${CHECKIN_CRON_MINUTE:-30}
+      # NewAPI URL（用于 API Key 验证，如果与 NewAPI 联动）
+      - NEWAPI_URL=${NEWAPI_URL:-}
+      # Dashboard 认证开关
+      - DASHBOARD_AUTH_ENABLED=${DASHBOARD_AUTH_ENABLED:-false}
+      # API Key 验证开关
+      - API_KEY_VALIDATION_ENABLED=${API_KEY_VALIDATION_ENABLED:-false}
+      # 主站优先恢复
+      - PRIMARY_SITE_CHECK_ENABLED=${PRIMARY_SITE_CHECK_ENABLED:-true}
+      - PRIMARY_SITE_CHECK_INTERVAL=${PRIMARY_SITE_CHECK_INTERVAL:-5}
+      # 代理配置
+      - HTTP_PROXY=http://${PROXY_HOST:-172.17.0.1}:${PROXY_PORT:-7890}
+    volumes:
+      - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18081/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
