@@ -8,6 +8,10 @@
   将多个 AnyRouter 账号整合为统一的 API 服务，支持自动签到、负载均衡、余额监控等功能。
 </p>
 
+<p align="center">
+  <a href="https://anyrouter.top/register?aff=1Fl4">🎁 注册 AnyRouter 获取免费 Claude API 额度</a>
+</p>
+
 ---
 
 ## TL;DR 快速开始
@@ -150,6 +154,57 @@ docker compose up -d
 ### 5. 访问管理界面
 
 打开浏览器访问 `http://localhost:18081`
+
+---
+
+## Web 管理界面
+
+AnyRouter Pool 提供了一个功能完善的 Web 管理界面，可以方便地管理账号、查看余额、执行签到等操作。
+
+### 界面功能
+
+| 功能 | 描述 |
+|------|------|
+| **概览** | 查看系统状态、总余额、账号数量、当前站点等 |
+| **账号管理** | 添加、编辑、删除、启用/禁用账号 |
+| **余额查看** | 查看每个账号的余额详情和使用情况 |
+| **手动签到** | 点击按钮立即执行所有账号签到 |
+| **站点切换** | 查看当前站点状态，手动切换到主站 |
+
+### 管理界面配置
+
+通过环境变量可以控制管理界面的行为：
+
+| 环境变量 | 默认值 | 描述 |
+|---------|--------|------|
+| `DASHBOARD_AUTH_ENABLED` | `false` | **管理界面登录认证**<br>- `true`: 需要使用 NewAPI 超级管理员账号登录才能访问管理界面<br>- `false`: 无需登录，直接访问（适合本地使用）|
+| `API_KEY_VALIDATION_ENABLED` | `false` | **API 请求验证**<br>- `true`: 调用 `/v1/*` API 时需要携带有效的 NewAPI 令牌<br>- `false`: 无需验证，任何人都可以调用 API |
+| `NEWAPI_URL` | - | NewAPI 服务地址，启用认证时必须配置<br>例如: `http://new-api:3000` |
+
+### 配置示例
+
+**场景 1: 本地个人使用（默认）**
+```bash
+# 无需登录，无需 API 验证
+DASHBOARD_AUTH_ENABLED=false
+API_KEY_VALIDATION_ENABLED=false
+```
+
+**场景 2: 与 NewAPI 联动，需要认证**
+```bash
+# 管理界面需要登录，API 需要令牌验证
+DASHBOARD_AUTH_ENABLED=true
+API_KEY_VALIDATION_ENABLED=true
+NEWAPI_URL=http://new-api:3000
+```
+
+**场景 3: 公开 API 但保护管理界面**
+```bash
+# 管理界面需要登录，但 API 对外开放
+DASHBOARD_AUTH_ENABLED=true
+API_KEY_VALIDATION_ENABLED=false
+NEWAPI_URL=http://new-api:3000
+```
 
 ---
 
@@ -425,7 +480,7 @@ MIT License
 
 ## 致谢
 
-- [AnyRouter](https://anyrouter.top) - Claude API 共享平台
+- [AnyRouter](https://anyrouter.top/register?aff=1Fl4) - Claude API 共享平台（注册即可获得免费额度）
 - [anyrouter-check-in](https://github.com/millylee/anyrouter-check-in) - 自动签到功能参考实现
 - [NewAPI](https://github.com/Calcium-Ion/new-api) - API 网关
 - [Playwright](https://playwright.dev) - 浏览器自动化
