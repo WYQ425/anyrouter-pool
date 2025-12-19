@@ -64,22 +64,23 @@ async def validate_api_key(api_key: str) -> Tuple[bool, Optional[str]]:
             logger.debug(f"API key validation cache hit: {'valid' if is_valid else 'invalid'}")
             return is_valid, None if is_valid else "Invalid API key (cached)"
 
-    # 调用 NewAPI 验证
+    # 调用 NewAPI 验证（使用 /v1/models 接口，该接口接受 API Key 认证）
     try:
         # 使用 trust_env=False 避免使用代理访问内部服务
         async with httpx.AsyncClient(timeout=10.0, trust_env=False) as client:
             response = await client.get(
-                f"{NEWAPI_URL}/api/user/self",
+                f"{NEWAPI_URL}/v1/models",
                 headers={"Authorization": f"Bearer {api_key}"}
             )
 
             if response.status_code == 200:
                 data = response.json()
-                if data.get("success") and data.get("data"):
+                # /v1/models 返回格式: {"data": [...], "object": "list"}
+                if "data" in data:
                     # 验证成功，缓存结果
                     _validation_cache[api_key] = (True, time.time() + CACHE_TTL)
-                    user_data = data.get("data", {})
-                    logger.info(f"API key validated for user: {user_data.get('username', 'unknown')}")
+                    model_count = len(data.get("data", []))
+                    logger.info(f"API key validated successfully, {model_count} models available")
                     return True, None
 
             # 验证失败

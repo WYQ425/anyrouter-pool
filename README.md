@@ -310,8 +310,15 @@ services:
 | 名称 | anyrouter-pool |
 | 类型 | Anthropic (14) |
 | Base URL | `http://anyrouter-pool:18081` |
-| 密钥 | 任意值（如 `sk-placeholder`）|
+| 密钥 | **有效的 NewAPI API Key**（见下方说明）|
 | 模型 | `claude-opus-4-5-20251101,claude-sonnet-4-5-20250929,claude-3-5-haiku-20241022` |
+
+> ⚠️ **重要：渠道密钥配置**
+>
+> 当 `API_KEY_VALIDATION_ENABLED=true` 时，NewAPI 转发请求使用的是**渠道配置的密钥**，不是用户原始的 Key。因此：
+> - 必须在密钥字段填入有效的 NewAPI API Key（如 `sk-xxx`）
+> - 该 Key 用于 AnyRouter Pool 验证请求来源
+> - 如果 `API_KEY_VALIDATION_ENABLED=false`，则可以填任意值
 
 #### 3. 启用 API Key 验证（可选）
 
@@ -469,6 +476,13 @@ A: 可以通过 Web 管理界面添加，或直接编辑 `data/accounts.json` �
 ### Q: 余额显示为 0 或负数？
 
 A: 新添加的账号需要执行一次签到才能获取余额数据，点击管理界面的"立即签到"按钮。
+
+### Q: 启用 API Key 验证后返回 401 错误？
+
+A: 检查以下配置：
+1. NewAPI 渠道的密钥字段是否填入了有效的 API Key（不能是 placeholder）
+2. 该 API Key 是否在 NewAPI 中有效（可通过 NewAPI 管理界面验证）
+3. 详见 `docs/troubleshooting-and-solutions.md` 中的 KEY-002 问题
 
 ---
 
