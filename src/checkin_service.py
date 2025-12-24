@@ -2,6 +2,8 @@
 AnyRouter 自动签到服务
 集成到 WAF Proxy 中，支持定时自动签到
 支持多站点故障转移
+
+更新: 使用共享的浏览器管理器，避免重复启动浏览器
 """
 
 import json
@@ -12,7 +14,9 @@ from typing import Optional
 
 import httpx
 from loguru import logger
-from playwright.async_api import async_playwright
+
+# 使用共享的浏览器管理器
+from browser_manager import browser_manager
 
 # 配置
 import os
@@ -86,34 +90,26 @@ def load_accounts():
 
 
 async def get_waf_cookies_for_checkin():
-    """使用 Playwright 获取 WAF cookies 用于签到"""
-    logger.info("Getting WAF cookies for check-in...")
+    """使用共享浏览器获取 WAF cookies 用于签到"""
+    logger.info("Getting WAF cookies for check-in using shared browser...")
 
     try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[f"--proxy-server={HTTP_PROXY}"]
-            )
-            context = await browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
-            )
-            page = await context.new_page()
+        # 使用共享的浏览器管理器
+        login_url = f"{ANYROUTER_BASE_URL}{LOGIN_PATH}"
+        cookies = await browser_manager.get_page_cookies(
+            url=login_url,
+            wait_time=5000
+        )
 
-            login_url = f"{ANYROUTER_BASE_URL}{LOGIN_PATH}"
-            await page.goto(login_url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(5000)  # 等待 JS 执行生成 WAF cookies
+        # 过滤出 WAF 相关的 cookies
+        waf_cookies = {
+            name: value
+            for name, value in cookies.items()
+            if name in WAF_COOKIE_NAMES
+        }
 
-            cookies = await context.cookies()
-            waf_cookies = {}
-            for cookie in cookies:
-                if cookie["name"] in WAF_COOKIE_NAMES:
-                    waf_cookies[cookie["name"]] = cookie["value"]
-
-            await browser.close()
-
-            logger.info(f"Got WAF cookies: {list(waf_cookies.keys())}")
-            return waf_cookies
+        logger.info(f"Got WAF cookies for check-in: {list(waf_cookies.keys())}")
+        return waf_cookies
 
     except Exception as e:
         logger.error(f"Failed to get WAF cookies for check-in: {e}")

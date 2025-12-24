@@ -26,8 +26,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
 ENV HTTP_PROXY=
 ENV HTTPS_PROXY=
 
-# 复制应用代码
-COPY waf_proxy.py balance_api.py checkin_service.py checkin_api.py accounts_api.py auth_service.py auth_api.py api_key_validation.py ./
+# 复制应用代码（包含新增的浏览器和Cookie管理器）
+COPY waf_proxy.py balance_api.py checkin_service.py checkin_api.py accounts_api.py auth_service.py auth_api.py api_key_validation.py browser_manager.py waf_cookie_manager.py ./
 
 # 复制静态文件目录
 COPY static/ ./static/

@@ -1,48 +1,71 @@
 # AnyRouter Pool - Docker Compose 配置
 #
+# 企业级架构特性:
+# - 常驻浏览器: 单例 Playwright，避免重复启动
+# - 智能缓存: WAF Cookie 30分钟 + 预刷新
+# - 资源限制: 防止内存爆炸
+# - 自动恢复: 浏览器崩溃自动重连
+#
 # 使用方法:
 #   1. 复制 .env.example 为 .env 并修改配置
-#   2. 复制 data/accounts.example.json 为 data/accounts.json 并配置账号
-#   3. 运行: docker compose up -d
+#   2. 运行: docker compose up -d
 
 services:
   # ============================================
-  # AnyRouter Pool - 账号池管理服务
+  # WAF Proxy - 账号池管理服务
+  # 企业级架构: 常驻浏览器 + 智能缓存 + 预刷新
   # ============================================
-  anyrouter-pool:
+  waf-proxy:
     build:
-      context: ./src
+      context: ./keeper-src
       dockerfile: Dockerfile
       args:
         # 构建时代理（用于 pip install）
         - HTTP_PROXY=http://${PROXY_HOST:-172.17.0.1}:${PROXY_PORT:-7890}
         - HTTPS_PROXY=http://${PROXY_HOST:-172.17.0.1}:${PROXY_PORT:-7890}
-    image: anyrouter-pool:latest
-    container_name: anyrouter-pool
+    image: waf-proxy:latest
+    container_name: waf-proxy
     restart: always
     ports:
-      - "${POOL_PORT:-18081}:18081"
+      - "${WAF_PROXY_PORT:-18081}:18081"
     environment:
       - TZ=${TZ:-Asia/Shanghai}
       - ANYROUTER_BASE_URL=https://anyrouter.top
       - ACCOUNTS_FILE=/app/data/accounts.json
       - BALANCES_FILE=/app/data/balances.json
       - WAF_PROXY_PORT=18081
-      # 签到配置
+
+      # ============ WAF Cookie 配置（企业级）============
+      # Cookie 缓存时间（秒），默认 30 分钟
+      - WAF_COOKIE_TTL=${WAF_COOKIE_TTL:-1800}
+      # 预刷新时间（过期前多少秒刷新），默认 5 分钟
+      - WAF_COOKIE_REFRESH_BEFORE=${WAF_COOKIE_REFRESH_BEFORE:-300}
+      # 刷新失败重试间隔（秒）
+      - WAF_COOKIE_RETRY_INTERVAL=${WAF_COOKIE_RETRY_INTERVAL:-30}
+
+      # ============ 浏览器配置（企业级）============
+      # 浏览器定期重启间隔（小时），防止内存泄漏
+      - BROWSER_RESTART_HOURS=${BROWSER_RESTART_HOURS:-6}
+
+      # ============ 签到配置 ============
       - CHECKIN_ENABLED=${CHECKIN_ENABLED:-true}
       - CHECKIN_CRON_HOUR=${CHECKIN_CRON_HOUR:-2,8,14,20}
       - CHECKIN_CRON_MINUTE=${CHECKIN_CRON_MINUTE:-30}
-      # NewAPI URL（用于 API Key 验证，如果与 NewAPI 联动）
-      - NEWAPI_URL=${NEWAPI_URL:-}
+
+      # ============ NewAPI 集成 ============
+      - NEWAPI_URL=${NEWAPI_URL:-http://new-api:3000}
       # Dashboard 认证开关
       - DASHBOARD_AUTH_ENABLED=${DASHBOARD_AUTH_ENABLED:-false}
       # API Key 验证开关
       - API_KEY_VALIDATION_ENABLED=${API_KEY_VALIDATION_ENABLED:-false}
-      # 主站优先恢复
+
+      # ============ 主站优先恢复 ============
       - PRIMARY_SITE_CHECK_ENABLED=${PRIMARY_SITE_CHECK_ENABLED:-true}
       - PRIMARY_SITE_CHECK_INTERVAL=${PRIMARY_SITE_CHECK_INTERVAL:-5}
-      # 代理配置
+
+      # ============ 代理配置 ============
       - HTTP_PROXY=http://${PROXY_HOST:-172.17.0.1}:${PROXY_PORT:-7890}
+
     volumes:
       - ./data:/app/data
     extra_hosts:
@@ -53,3 +76,13 @@ services:
       timeout: 10s
       start_period: 90s
       retries: 3
+
+    # ============ 资源限制（关键！防止内存爆炸）============
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
