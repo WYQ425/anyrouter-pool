@@ -14,11 +14,11 @@
 
 ---
 
-## TL;DR 快速开始
+## 快速开始
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/yourusername/anyrouter-pool.git && cd anyrouter-pool
+git clone https://github.com/WYQ425/anyrouter-pool.git && cd anyrouter-pool
 
 # 2. 配置
 cp .env.example .env                              # 编辑 .env 设置代理端口
@@ -39,9 +39,11 @@ docker compose up -d
 |------|------|
 | **多账号管理** | 统一管理多个 AnyRouter 账号，支持 CRUD 操作 |
 | **负载均衡** | 请求自动分配到不同账号，充分利用配额 |
+| **账号故障转移** | 账号请求失败时自动切换，支持健康检测与临时禁用 |
 | **自动签到** | 定时自动签到获取每日额度（每账号约 $25/天）|
-| **WAF 绕过** | 使用 Playwright 自动处理阿里云 WAF 验证 |
-| **多站点故障转移** | 主站不可用时自动切换备用站点 |
+| **常驻浏览器** | 单例 Playwright 浏览器，避免重复启动，自动崩溃恢复 |
+| **WAF Cookie 缓存** | 30 分钟智能缓存 + 预刷新，高并发下仅触发一次刷新 |
+| **多站点故障转移** | 主站不可用时自动切换备用站点，支持主站优先恢复 |
 | **余额监控** | 实时查看各账号余额，汇总统计 |
 | **Web 管理界面** | Vue 3 + Tailwind CSS 构建的现代化管理界面 |
 | **NewAPI 集成** | 可作为 NewAPI 的渠道，实现用户管理和计费 |
@@ -102,7 +104,7 @@ docker compose up -d
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/yourusername/anyrouter-pool.git
+git clone https://github.com/WYQ425/anyrouter-pool.git
 cd anyrouter-pool
 ```
 
@@ -433,7 +435,9 @@ anyrouter-pool/
 ├── README.md               # 项目说明
 │
 ├── src/                    # 源代码
-│   ├── waf_proxy.py       # 核心入口
+│   ├── waf_proxy.py       # 核心代理入口
+│   ├── browser_manager.py # 常驻浏览器管理（单例）
+│   ├── waf_cookie_manager.py # WAF Cookie 缓存管理
 │   ├── accounts_api.py    # 账号管理 API
 │   ├── balance_api.py     # 余额 API
 │   ├── checkin_service.py # 签到服务
@@ -444,8 +448,6 @@ anyrouter-pool/
 │   ├── config.py          # 配置管理
 │   ├── static/            # Web UI
 │   │   └── index.html
-│   ├── services/          # 服务模块
-│   ├── utils/             # 工具模块
 │   ├── Dockerfile         # Docker 构建
 │   └── requirements.txt   # Python 依赖
 │
