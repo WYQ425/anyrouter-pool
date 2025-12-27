@@ -31,11 +31,11 @@ class CookieState(Enum):
 
 
 # ============== 配置 ==============
-# WAF Cookie 缓存时间（秒）
-WAF_COOKIE_TTL = int(os.getenv("WAF_COOKIE_TTL", "1800"))  # 默认 30 分钟
+# WAF Cookie 缓存时间（秒）- 优化至 45 分钟，阿里云 WAF Cookie 实际有效期通常 1-2 小时
+WAF_COOKIE_TTL = int(os.getenv("WAF_COOKIE_TTL", "2700"))  # 默认 45 分钟
 
-# 预刷新时间（过期前多少秒开始刷新）
-WAF_COOKIE_REFRESH_BEFORE = int(os.getenv("WAF_COOKIE_REFRESH_BEFORE", "300"))  # 默认 5 分钟
+# 预刷新时间（过期前多少秒开始刷新）- 优化至 10 分钟预刷新
+WAF_COOKIE_REFRESH_BEFORE = int(os.getenv("WAF_COOKIE_REFRESH_BEFORE", "600"))  # 默认 10 分钟
 
 # 刷新失败后的重试间隔（秒）
 WAF_COOKIE_RETRY_INTERVAL = int(os.getenv("WAF_COOKIE_RETRY_INTERVAL", "30"))
@@ -43,8 +43,8 @@ WAF_COOKIE_RETRY_INTERVAL = int(os.getenv("WAF_COOKIE_RETRY_INTERVAL", "30"))
 # WAF 登录页面 URL
 WAF_LOGIN_URL = os.getenv("WAF_LOGIN_URL", "https://anyrouter.top/login")
 
-# 页面加载后等待时间（毫秒），等待 JS 生成 Cookie
-WAF_PAGE_WAIT_MS = int(os.getenv("WAF_PAGE_WAIT_MS", "5000"))
+# 页面加载后等待时间（毫秒）- 配合资源拦截优化，可降低等待时间
+WAF_PAGE_WAIT_MS = int(os.getenv("WAF_PAGE_WAIT_MS", "3000"))
 
 
 class WAFCookieManager:

@@ -259,7 +259,14 @@ async def scheduled_checkin():
 
 
 async def check_primary_site_health():
-    """检查主站是否可用"""
+    """
+    检查主站是否可用 - 轻量级检查优化版
+
+    优化点：
+    1. 使用 HEAD 请求代替 GET，减少数据传输
+    2. 更短的超时时间
+    3. 复用现有 WAF cookies，不触发新的浏览器操作
+    """
     from datetime import datetime
 
     primary_site = SITES[0]  # 主站始终是第一个
@@ -267,36 +274,35 @@ async def check_primary_site_health():
     primary_site_status["check_count"] += 1
 
     try:
-        # 获取 WAF cookies（主站需要）
-        cookies = await get_waf_cookies()
+        # 复用现有 WAF cookies（不强制刷新，避免浏览器操作）
+        cookies = waf_cookie_manager.cookies if waf_cookie_manager.is_valid else {}
 
-        # 发送测试请求到主站
+        # 使用 HEAD 请求进行轻量级检查
         async with httpx.AsyncClient(
             http2=False,
-            timeout=httpx.Timeout(connect=10.0, read=30.0, write=10.0, pool=10.0),
+            timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
             proxy=HTTP_PROXY if primary_site.get("use_proxy") else None,
             cookies=cookies
         ) as client:
-            # 使用一个简单的 API 请求测试（获取模型列表）
-            response = await client.get(
+            # HEAD 请求比 GET 更轻量
+            response = await client.head(
                 f"{primary_site['url']}/v1/models",
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                }
+                },
+                follow_redirects=True
             )
 
             # 检查响应
             content_type = response.headers.get("content-type", "")
 
-            # 如果返回 HTML，说明被 WAF 拦截
+            # 如果返回 HTML（Content-Type 包含 text/html），说明被 WAF 拦截
             if "text/html" in content_type:
-                logger.debug(f"[Primary Check] WAF challenge detected, trying to refresh cookies...")
-                # 尝试刷新 WAF cookies
-                await refresh_waf_cookies()
+                logger.debug(f"[Primary Check] WAF challenge detected")
                 primary_site_status["last_check_result"] = "waf_challenge"
                 return False
 
-            # 检查状态码
+            # 检查状态码：2xx/3xx/4xx 都说明服务可达（4xx 是业务错误，不是不可用）
             if response.status_code < 500:
                 primary_site_status["last_check_result"] = "healthy"
                 return True
@@ -735,6 +741,7 @@ async def proxy(request: Request, path: str):
 
         headers = {
             "Content-Type": request.headers.get("content-type", "application/json"),
+            "Authorization": f"Bearer {api_key}",
             "x-api-key": api_key,
             "anthropic-version": request.headers.get("anthropic-version", "2023-06-01"),
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",

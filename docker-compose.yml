@@ -17,7 +17,7 @@ services:
   # ============================================
   waf-proxy:
     build:
-      context: ./keeper-src
+      context: ./src
       dockerfile: Dockerfile
       args:
         # 构建时代理（用于 pip install）

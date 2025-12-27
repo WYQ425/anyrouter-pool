@@ -14,25 +14,6 @@
 
 ---
 
-## 快速开始
-
-```bash
-# 1. 克隆项目
-git clone https://github.com/WYQ425/anyrouter-pool.git && cd anyrouter-pool
-
-# 2. 配置
-cp .env.example .env                              # 编辑 .env 设置代理端口
-cp data/accounts.example.json data/accounts.json  # 编辑添加你的 AnyRouter 账号
-
-# 3. 启动
-docker compose up -d
-
-# 4. 访问管理界面
-# 打开 http://localhost:18081
-```
-
----
-
 ## 功能特性
 
 | 功能 | 描述 |
@@ -99,30 +80,38 @@ docker compose up -d
 ### 环境要求
 
 - Docker & Docker Compose
-- HTTP 代理（访问 AnyRouter 需要）
+- HTTP 代理（访问 AnyRouter 主站需要）
 
-### 1. 克隆项目
+### 1. 克隆并配置
 
 ```bash
+# 克隆项目
 git clone https://github.com/WYQ425/anyrouter-pool.git
 cd anyrouter-pool
-```
 
-### 2. 配置环境变量
-
-```bash
+# 配置环境变量
 cp .env.example .env
-# 编辑 .env 修改代理配置
-```
+# 编辑 .env 设置代理端口等配置
 
-### 3. 配置账号
-
-```bash
+# 配置账号
 cp data/accounts.example.json data/accounts.json
 # 编辑 data/accounts.json 添加你的 AnyRouter 账号
 ```
 
-**账号配置格式：**
+### 2. 启动服务
+
+```bash
+docker compose up -d
+
+# 查看日志
+docker compose logs -f waf-proxy
+```
+
+### 3. 访问管理界面
+
+打开浏览器访问 `http://localhost:18081`
+
+### 账号配置格式
 
 ```json
 [
@@ -146,16 +135,6 @@ cp data/accounts.example.json data/accounts.json
 | `api_user` | AnyRouter 个人页面 URL 中的用户 ID |
 | `api_key` | AnyRouter → 令牌管理 → 创建令牌 |
 | `session` | 浏览器开发者工具 → Application → Cookies → session |
-
-### 4. 启动服务
-
-```bash
-docker compose up -d
-```
-
-### 5. 访问管理界面
-
-打开浏览器访问 `http://localhost:18081`
 
 ---
 
@@ -219,6 +198,12 @@ NEWAPI_URL=http://new-api:3000
 | `/v1/messages` | POST | Claude API 消息端点（兼容 Anthropic 格式）|
 | `/v1/*` | * | 所有 API 请求代理 |
 | `/health` | GET | 健康检查、系统状态 |
+| `/reload` | POST | 重新加载账号配置 |
+| `/refresh-waf` | POST | 强制刷新 WAF Cookies |
+| `/restart-browser` | POST | 重启 Playwright 浏览器 |
+| `/switch-to-primary` | POST | 切换回主站（检查健康状态）|
+| `/force-switch-to-primary` | POST | 强制切换回主站 |
+| `/clear-api-key-cache` | POST | 清除 API Key 验证缓存 |
 
 ### 管理 API
 
@@ -296,11 +281,11 @@ services:
   new-api:
     image: calciumion/new-api:latest
     ports:
-      - "13000:3000"
+      - "3000:3000"
     volumes:
       - ./data/new-api:/data
-    depends_on:
-      - anyrouter-pool
+    environment:
+      - TZ=Asia/Shanghai
 ```
 
 #### 2. 在 NewAPI 中添加渠道
@@ -311,7 +296,7 @@ services:
 |--------|-----|
 | 名称 | anyrouter-pool |
 | 类型 | Anthropic (14) |
-| Base URL | `http://anyrouter-pool:18081` |
+| Base URL | `http://waf-proxy:18081` |
 | 密钥 | **有效的 NewAPI API Key**（见下方说明）|
 | 模型 | `claude-opus-4-5-20251101,claude-sonnet-4-5-20250929,claude-3-5-haiku-20241022` |
 
@@ -381,6 +366,9 @@ curl http://localhost:18081/balance/newapi-format
 | `PROXY_HOST` | 172.17.0.1 | 代理主机地址 |
 | `PROXY_PORT` | 7890 | 代理端口 |
 | `POOL_PORT` | 18081 | 服务端口 |
+| `WAF_COOKIE_TTL` | 1800 | WAF Cookie 缓存时间（秒）|
+| `WAF_COOKIE_REFRESH_BEFORE` | 300 | 预刷新时间（过期前多少秒刷新）|
+| `BROWSER_RESTART_HOURS` | 6 | 浏览器定期重启间隔（小时）|
 | `CHECKIN_ENABLED` | true | 启用自动签到 |
 | `CHECKIN_CRON_HOUR` | 2,8,14,20 | 签到时间（小时）|
 | `CHECKIN_CRON_MINUTE` | 30 | 签到时间（分钟）|
@@ -389,6 +377,7 @@ curl http://localhost:18081/balance/newapi-format
 | `API_KEY_VALIDATION_ENABLED` | false | API 请求令牌验证 |
 | `PRIMARY_SITE_CHECK_ENABLED` | true | 主站优先恢复 |
 | `PRIMARY_SITE_CHECK_INTERVAL` | 5 | 主站检查间隔（分钟）|
+| `TZ` | Asia/Shanghai | 时区 |
 
 ### 多站点故障转移
 
@@ -435,18 +424,28 @@ anyrouter-pool/
 ├── README.md               # 项目说明
 │
 ├── src/                    # 源代码
-│   ├── waf_proxy.py       # 核心代理入口
-│   ├── browser_manager.py # 常驻浏览器管理（单例）
+│   ├── waf_proxy.py        # 核心代理入口
+│   ├── browser_manager.py  # 常驻浏览器管理（单例）
 │   ├── waf_cookie_manager.py # WAF Cookie 缓存管理
-│   ├── accounts_api.py    # 账号管理 API
-│   ├── balance_api.py     # 余额 API
-│   ├── checkin_service.py # 签到服务
-│   ├── checkin_api.py     # 签到 API
-│   ├── auth_service.py    # 认证服务
-│   ├── auth_api.py        # 认证 API
+│   ├── accounts_api.py     # 账号管理 API
+│   ├── balance_api.py      # 余额 API
+│   ├── checkin_service.py  # 签到服务
+│   ├── checkin_api.py      # 签到 API
+│   ├── auth_service.py     # 认证服务
+│   ├── auth_api.py         # 认证 API
 │   ├── api_key_validation.py # API Key 验证
-│   ├── config.py          # 配置管理
-│   ├── static/            # Web UI
+│   ├── config.py           # 配置管理
+│   │
+│   ├── services/           # 业务服务
+│   │   ├── balance_service.py    # 余额服务
+│   │   ├── channel_sync_service.py # 渠道同步
+│   │   └── notify_service.py     # 通知服务
+│   │
+│   ├── utils/              # 工具类
+│   │   ├── anyrouter_client.py   # AnyRouter API 客户端
+│   │   └── newapi_client.py      # NewAPI 客户端
+│   │
+│   ├── static/             # Web UI
 │   │   └── index.html
 │   ├── Dockerfile         # Docker 构建
 │   └── requirements.txt   # Python 依赖
