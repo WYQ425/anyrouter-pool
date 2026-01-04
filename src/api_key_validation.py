@@ -19,11 +19,30 @@ API_KEY_VALIDATION_ENABLED = os.getenv("API_KEY_VALIDATION_ENABLED", "false").lo
 # 格式: {api_key: (is_valid, expire_time)}
 _validation_cache: dict[str, Tuple[bool, float]] = {}
 CACHE_TTL = 300  # 缓存 5 分钟
+CACHE_MAX_SIZE = 1000  # 缓存最大条目数，防止内存无限增长
 
 
 def is_validation_enabled() -> bool:
     """检查是否启用了 API Key 验证"""
     return API_KEY_VALIDATION_ENABLED
+
+
+def _cleanup_expired_cache():
+    """清理过期的缓存条目（防止内存泄漏）"""
+    global _validation_cache
+    now = time.time()
+
+    # 清理过期条目
+    expired_keys = [k for k, v in _validation_cache.items() if v[1] <= now]
+    for k in expired_keys:
+        del _validation_cache[k]
+
+    # 如果缓存仍然过大，删除最早过期的条目
+    if len(_validation_cache) > CACHE_MAX_SIZE:
+        # 按过期时间排序，保留最新的
+        sorted_items = sorted(_validation_cache.items(), key=lambda x: x[1][1], reverse=True)
+        _validation_cache = dict(sorted_items[:CACHE_MAX_SIZE])
+        logger.debug(f"Cache size limited to {CACHE_MAX_SIZE} entries")
 
 
 def extract_api_key(request) -> Optional[str]:
@@ -55,6 +74,9 @@ async def validate_api_key(api_key: str) -> Tuple[bool, Optional[str]]:
     """
     if not api_key:
         return False, "API key is required"
+
+    # 定期清理过期缓存（每次验证时检查，防止内存泄漏）
+    _cleanup_expired_cache()
 
     # 检查缓存
     cached = _validation_cache.get(api_key)

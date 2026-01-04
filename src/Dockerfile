@@ -9,25 +9,24 @@ WORKDIR /app
 ENV TZ=Asia/Shanghai
 RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
 
+# 内存优化
+# 限制 glibc 内存分配区，防止 Python 内存碎片化导致 OOM
+ENV MALLOC_ARENA_MAX=2
+# 可选：开启 Python 优化模式 (去除断言等)
+ENV PYTHONOPTIMIZE=1
+
 # 复制依赖文件
 COPY requirements.txt .
 
-# 构建时代理配置（用于 pip install）
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-ENV HTTP_PROXY=$HTTP_PROXY
-ENV HTTPS_PROXY=$HTTPS_PROXY
-
-# 安装 Python 依赖
-RUN pip install --no-cache-dir -r requirements.txt \
+# 配置 pip 使用清华镜像并安装依赖
+# 注意：必须在同一个 RUN 中 unset 代理，否则 build arg 会覆盖 ENV
+RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
+    && unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy \
+    && pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir fastapi uvicorn httpx[http2]
 
-# 清除代理环境变量（运行时不需要）
-ENV HTTP_PROXY=
-ENV HTTPS_PROXY=
-
 # 复制应用代码（包含新增的浏览器和Cookie管理器）
-COPY waf_proxy.py balance_api.py checkin_service.py checkin_api.py accounts_api.py auth_service.py auth_api.py api_key_validation.py browser_manager.py waf_cookie_manager.py ./
+COPY waf_proxy.py balance_api.py checkin_service.py checkin_api.py accounts_api.py auth_service.py auth_api.py api_key_validation.py browser_manager.py waf_cookie_manager.py config.py email_service.py ./
 
 # 复制静态文件目录
 COPY static/ ./static/

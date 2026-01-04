@@ -181,6 +181,19 @@ def load_accounts():
         logger.error(f"Accounts file not found: {ACCOUNTS_FILE}")
 
 
+def get_total_accounts_count():
+    """获取所有账号的总数（包括无 api_key 和禁用的账号）"""
+    if ACCOUNTS_FILE.exists():
+        try:
+            with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return len(data)
+        except Exception as e:
+            logger.error(f"Failed to count total accounts: {e}")
+            return len(accounts)
+    return len(accounts)
+
+
 def is_account_healthy(account_name: str) -> bool:
     """检查账号是否健康（未被临时禁用）"""
     if account_name not in account_health:
@@ -499,11 +512,13 @@ async def health():
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
-        "accounts": len(accounts),
+        "accounts": get_total_accounts_count(),  # 所有账号数量（用于 Dashboard 显示）
+        "active_accounts": len(accounts),  # 有 API Key 且启用的账号（用于负载均衡）
 
         # 账号健康状态（新增）
         "account_health": {
-            "total": len(accounts),
+            "total": get_total_accounts_count(),
+            "active": len(accounts),
             "healthy": len(healthy_accounts),
             "unhealthy": len(unhealthy_accounts),
             "unhealthy_accounts": unhealthy_accounts,

@@ -917,7 +917,8 @@
                             total_failed: result.failed_count,
                             results: result.results
                         };
-                        if (result.results) balances.value = result.results;
+                        // 签到完成后自动刷新余额数据（获取正确格式的余额数据）
+                        await fetchBalances();
                     } else {
                         showToast('签到失败: ' + (data.data?.message || '未知错误'), 'error');
                     }
@@ -927,6 +928,8 @@
                     }
                 } finally {
                     loading.checkin = false;
+                    // 无论签到成功还是失败，都刷新状态（后端始终会更新 last_run）
+                    await fetchCheckinStatus();
                     fetchDashboard();
                 }
             };
@@ -1031,6 +1034,8 @@
                         closeModal();
                         fetchAccounts();
                         fetchDashboard();
+                        // 添加/更新账号后刷新余额列表，确保新账号显示在列表中
+                        fetchBalances();
                     } else {
                         showToast(data.detail || '操作失败', 'error');
                     }
@@ -1076,6 +1081,8 @@
                         deleteModal.show = false;
                         fetchAccounts();
                         fetchDashboard();
+                        // 删除账号后刷新余额列表
+                        fetchBalances();
                     } else {
                         showToast(data.detail || '删除失败', 'error');
                     }

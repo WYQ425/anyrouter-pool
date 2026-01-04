@@ -54,10 +54,20 @@ class NewAPIConfig(BaseModel):
 
 class NotifyConfig(BaseModel):
     """通知配置"""
+    # Telegram
     telegram_bot_token: str | None = None
     telegram_chat_id: str | None = None
+    # 钉钉
     dingtalk_webhook: str | None = None
+    # 飞书
     feishu_webhook: str | None = None
+    # 邮件通知
+    email_enabled: bool = False  # 是否启用邮件通知
+    email_smtp_host: str = "smtp.163.com"  # SMTP 服务器
+    email_smtp_port: int = 465  # SMTP 端口（SSL）
+    email_sender: str = ""  # 发件人邮箱
+    email_password: str = ""  # SMTP 授权码（不是登录密码）
+    email_receiver: str = ""  # 收件人邮箱（可以和发件人相同）
 
 
 class AppConfig(BaseModel):
@@ -107,6 +117,13 @@ class AppConfig(BaseModel):
         config.notify.telegram_chat_id = os.getenv("TELEGRAM_CHAT_ID")
         config.notify.dingtalk_webhook = os.getenv("DINGTALK_WEBHOOK")
         config.notify.feishu_webhook = os.getenv("FEISHU_WEBHOOK")
+        # 邮件通知配置
+        config.notify.email_enabled = os.getenv("EMAIL_NOTIFY_ENABLED", "false").lower() == "true"
+        config.notify.email_smtp_host = os.getenv("EMAIL_SMTP_HOST", "smtp.163.com")
+        config.notify.email_smtp_port = int(os.getenv("EMAIL_SMTP_PORT", "465"))
+        config.notify.email_sender = os.getenv("EMAIL_SENDER", "")
+        config.notify.email_password = os.getenv("EMAIL_PASSWORD", "")
+        config.notify.email_receiver = os.getenv("EMAIL_RECEIVER", "")
 
         # 加载默认 providers
         config.providers = {

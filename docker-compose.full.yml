@@ -1,0 +1,124 @@
+# AnyRouter Pool + NewAPI - 完整版配置
+# 包含 AnyRouter Pool 和 NewAPI，适合需要用户管理和计费的场景
+#
+# 使用方法:
+#   docker compose -f docker-compose.full.yml up -d
+#
+# 访问地址:
+#   - NewAPI 管理界面: http://localhost:13000
+#   - AnyRouter Pool 管理界面: http://localhost:18081
+
+services:
+  # ============================================
+  # NewAPI - API 网关（用户管理、计费、多渠道路由）
+  # ============================================
+  new-api:
+    image: calciumion/new-api:latest
+    container_name: new-api
+    restart: always
+    ports:
+      - "${NEWAPI_PORT:-13000}:3000"
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - SERVER_ADDRESS=${SERVER_ADDRESS:-}
+      - SESSION_SECRET=${SESSION_SECRET:-anyrouter-pool-session-secret}
+      # 代理配置（用于访问外部 OAuth 等）
+      - HTTP_PROXY=${HTTP_PROXY:-}
+      - HTTPS_PROXY=${HTTP_PROXY:-}
+    volumes:
+      - ./data/new-api:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - anyrouter-network
+    depends_on:
+      anyrouter-pool:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+
+  # ============================================
+  # AnyRouter Pool - 多账号聚合管理
+  # ============================================
+  anyrouter-pool:
+    build:
+      context: ./src
+      dockerfile: Dockerfile
+      args:
+        - HTTP_PROXY=${HTTP_PROXY:-}
+        - HTTPS_PROXY=${HTTP_PROXY:-}
+    image: anyrouter-pool:latest
+    container_name: anyrouter-pool
+    restart: always
+    ports:
+      - "${POOL_PORT:-18081}:18081"
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - ANYROUTER_BASE_URL=https://anyrouter.top
+      - ACCOUNTS_FILE=/app/data/accounts.json
+      - BALANCES_FILE=/app/data/balances.json
+
+      # ============ WAF Cookie 配置 ============
+      - WAF_COOKIE_TTL=${WAF_COOKIE_TTL:-1800}
+      - WAF_COOKIE_REFRESH_BEFORE=${WAF_COOKIE_REFRESH_BEFORE:-300}
+      - WAF_COOKIE_RETRY_INTERVAL=${WAF_COOKIE_RETRY_INTERVAL:-30}
+
+      # ============ 浏览器配置 ============
+      - BROWSER_RESTART_HOURS=${BROWSER_RESTART_HOURS:-6}
+
+      # ============ 签到配置 ============
+      - CHECKIN_ENABLED=${CHECKIN_ENABLED:-true}
+      - CHECKIN_CRON_HOUR=${CHECKIN_CRON_HOUR:-2,8,14,20}
+      - CHECKIN_CRON_MINUTE=${CHECKIN_CRON_MINUTE:-30}
+      - CHECKIN_MAX_RETRIES=${CHECKIN_MAX_RETRIES:-3}
+      - CHECKIN_RETRY_DELAY=${CHECKIN_RETRY_DELAY:-3}
+
+      # ============ NewAPI 集成（完整版默认开启认证）============
+      - NEWAPI_URL=http://new-api:3000
+      - DASHBOARD_AUTH_ENABLED=${DASHBOARD_AUTH_ENABLED:-true}
+      - API_KEY_VALIDATION_ENABLED=${API_KEY_VALIDATION_ENABLED:-true}
+
+      # ============ 主站优先恢复 ============
+      - PRIMARY_SITE_CHECK_ENABLED=${PRIMARY_SITE_CHECK_ENABLED:-true}
+      - PRIMARY_SITE_CHECK_INTERVAL=${PRIMARY_SITE_CHECK_INTERVAL:-5}
+
+      # ============ 代理配置 ============
+      - HTTP_PROXY=${HTTP_PROXY:-}
+
+      # ============ 邮件通知配置 ============
+      - EMAIL_NOTIFY_ENABLED=${EMAIL_NOTIFY_ENABLED:-false}
+      - EMAIL_SMTP_HOST=${EMAIL_SMTP_HOST:-smtp.163.com}
+      - EMAIL_SMTP_PORT=${EMAIL_SMTP_PORT:-465}
+      - EMAIL_SENDER=${EMAIL_SENDER:-}
+      - EMAIL_PASSWORD=${EMAIL_PASSWORD:-}
+      - EMAIL_RECEIVER=${EMAIL_RECEIVER:-}
+
+    volumes:
+      - ./data/pool:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - anyrouter-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:18081/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
+
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 256M
+
+networks:
+  anyrouter-network:
+    driver: bridge
