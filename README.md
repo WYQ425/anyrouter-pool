@@ -272,7 +272,7 @@ AnyRouter Pool 可以作为 [NewAPI](https://github.com/Calcium-Ion/new-api) 的
 |--------|-----|
 | 名称 | anyrouter-pool |
 | 类型 | Anthropic (14) |
-| Base URL | `http://anyrouter-pool:18081` |
+| Base URL | `http://172.17.0.1:18081` |
 | 密钥 | 有效的 NewAPI API Key |
 | 模型 | `claude-opus-4-5-20251101,claude-sonnet-4-5-20250929,claude-3-5-haiku-20241022` |
 
