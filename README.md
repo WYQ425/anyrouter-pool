@@ -193,15 +193,15 @@ AnyRouter Pool 提供功能完善的 Web 管理界面，**支持先启动后配�
 
 **概览页面** - 查看系统状态、总余额、账号数量、签到调度
 
-![Dashboard Overview](screenshots/dashboard-overview.png)
+![Dashboard Overview](https://github.com/user-attachments/assets/b16fa647-c80f-4159-a0cd-51f927ad4b9a)
 
 **账号管理** - 添加、编辑、删除、启用/禁用账号
 
-![Account Management](screenshots/dashboard-accounts.png)
+![Account Management](https://github.com/user-attachments/assets/2710f272-09ad-4ee4-861c-811aee6583b2)
 
 **添加账号** - 通过 Web 界面配置账号信息
 
-![Add Account](screenshots/dashboard-add-account.png)
+![Add Account](https://github.com/user-attachments/assets/b4540949-ddf3-4fb1-af82-8108d19627e4)
 
 ### 界面功能
 
