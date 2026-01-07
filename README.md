@@ -245,7 +245,7 @@ AnyRouter Pool 提供功能完善的 Web 管理界面，**支持先启动后配�
 | session_cookie | 登录会话 Cookie | 浏览器 F12 → Application → Cookies → `session` |
 | api_key | API 令牌（可选） | AnyRouter → 令牌管理 → 创建令牌 |
 
-> 💡 **提示**: `api_key` 仅在作为 NewAPI 渠道时需要，个人使用可以不填。
+> 💡 **提示**: 若仅进行签到管理， `api_key` 可以不填。
 
 ---
 
