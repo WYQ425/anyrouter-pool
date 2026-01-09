@@ -1,5 +1,12 @@
-# AnyRouter Pool + NewAPI - 完整版配置
+# AnyRouter Pool + NewAPI - 完整版配置 v2.1
 # 包含 AnyRouter Pool 和 NewAPI，适合需要用户管理和计费的场景
+#
+# v2.1 新特性:
+# - 站点优先降级: 先换站点再换模型
+# - 快速失败: 所有资源不可用时立即返回
+# - 半开状态: 冷却期后渐进式恢复
+# - 冷却抖动: 防止惊群效应
+# - 模型降级: 负载过高时自动切换
 #
 # 使用方法:
 #   docker compose -f docker-compose.full.yml up -d
@@ -42,7 +49,8 @@ services:
           memory: 128M
 
   # ============================================
-  # AnyRouter Pool - 多账号聚合管理
+  # AnyRouter Pool - 多账号聚合管理 v2.1
+  # 高可用架构: 站点优先降级 + 快速失败 + 半开恢复
   # ============================================
   anyrouter-pool:
     build:
@@ -62,14 +70,6 @@ services:
       - ACCOUNTS_FILE=/app/data/accounts.json
       - BALANCES_FILE=/app/data/balances.json
 
-      # ============ WAF Cookie 配置 ============
-      - WAF_COOKIE_TTL=${WAF_COOKIE_TTL:-1800}
-      - WAF_COOKIE_REFRESH_BEFORE=${WAF_COOKIE_REFRESH_BEFORE:-300}
-      - WAF_COOKIE_RETRY_INTERVAL=${WAF_COOKIE_RETRY_INTERVAL:-30}
-
-      # ============ 浏览器配置 ============
-      - BROWSER_RESTART_HOURS=${BROWSER_RESTART_HOURS:-6}
-
       # ============ 签到配置 ============
       - CHECKIN_ENABLED=${CHECKIN_ENABLED:-true}
       - CHECKIN_CRON_HOUR=${CHECKIN_CRON_HOUR:-2,8,14,20}
@@ -82,9 +82,45 @@ services:
       - DASHBOARD_AUTH_ENABLED=${DASHBOARD_AUTH_ENABLED:-true}
       - API_KEY_VALIDATION_ENABLED=${API_KEY_VALIDATION_ENABLED:-true}
 
-      # ============ 主站优先恢复 ============
+      # ============ 主站优先恢复 v2.1 ============
       - PRIMARY_SITE_CHECK_ENABLED=${PRIMARY_SITE_CHECK_ENABLED:-true}
       - PRIMARY_SITE_CHECK_INTERVAL=${PRIMARY_SITE_CHECK_INTERVAL:-5}
+      - PRIMARY_SITE_CHECK_INTERVAL_URGENT=${PRIMARY_SITE_CHECK_INTERVAL_URGENT:-1}
+      - PRIMARY_SITE_CHECK_REQUIRED_SUCCESSES=${PRIMARY_SITE_CHECK_REQUIRED_SUCCESSES:-2}
+
+      # ============ 站点管理器配置 v2.1 ============
+      - SITE_MANAGER_ENABLED=${SITE_MANAGER_ENABLED:-true}
+      - SITE_MAX_CONSECUTIVE_FAILS=${SITE_MAX_CONSECUTIVE_FAILS:-5}
+      - SITE_COOLDOWN_SECONDS=${SITE_COOLDOWN_SECONDS:-60}
+      - MAX_CONCURRENT_REQUESTS=${MAX_CONCURRENT_REQUESTS:-50}
+      - GC_INTERVAL_SECONDS=${GC_INTERVAL_SECONDS:-300}
+      - SITE_ALERT_ENABLED=${SITE_ALERT_ENABLED:-true}
+      - SITE_ALERT_COOLDOWN=${SITE_ALERT_COOLDOWN:-300}
+
+      # ============ 模型降级配置 v2.1 ============
+      - MODEL_DEGRADATION_ENABLED=${MODEL_DEGRADATION_ENABLED:-true}
+      - MODEL_DEGRADATION_THRESHOLD=${MODEL_DEGRADATION_THRESHOLD:-3}
+      - MODEL_DEGRADATION_COOLDOWN=${MODEL_DEGRADATION_COOLDOWN:-300}
+      - MODEL_AUTO_REPLACE_ENABLED=${MODEL_AUTO_REPLACE_ENABLED:-true}
+      - MODEL_IMMEDIATE_COOLDOWN=${MODEL_IMMEDIATE_COOLDOWN:-30}
+
+      # ============ 降级策略配置 v2.1 ============
+      - DEGRADATION_STRATEGY=${DEGRADATION_STRATEGY:-site_first}
+      - MAX_MODEL_FALLBACKS=${MAX_MODEL_FALLBACKS:-3}
+      - ALLOW_CROSS_TIER_FALLBACK=${ALLOW_CROSS_TIER_FALLBACK:-true}
+
+      # ============ 快速失败配置 v2.1 ============
+      - FAST_FAIL_ENABLED=${FAST_FAIL_ENABLED:-true}
+
+      # ============ 熔断器半开状态 v2.1 ============
+      - HALF_OPEN_ENABLED=${HALF_OPEN_ENABLED:-true}
+      - SITE_HALF_OPEN_DURATION=${SITE_HALF_OPEN_DURATION:-30}
+      - SITE_HALF_OPEN_PASS_RATE=${SITE_HALF_OPEN_PASS_RATE:-0.1}
+      - SITE_HALF_OPEN_REQUIRED_SUCCESSES=${SITE_HALF_OPEN_REQUIRED_SUCCESSES:-3}
+
+      # ============ 冷却时间抖动 v2.1 ============
+      - COOLDOWN_JITTER_ENABLED=${COOLDOWN_JITTER_ENABLED:-true}
+      - COOLDOWN_JITTER_MAX=${COOLDOWN_JITTER_MAX:-10}
 
       # ============ 代理配置 ============
       - HTTP_PROXY=${HTTP_PROXY:-}
@@ -110,11 +146,12 @@ services:
       start_period: 90s
       retries: 3
 
+    # ============ 资源限制（防止内存过高）============
     deploy:
       resources:
         limits:
-          cpus: '2'
-          memory: 1G
+          cpus: '1.0'
+          memory: 600M
         reservations:
           cpus: '0.5'
           memory: 256M
