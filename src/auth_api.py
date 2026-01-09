@@ -200,6 +200,7 @@ def is_public_path(path: str) -> bool:
     - /health - 健康检查
     - /auth/* - 认证相关路由
     - / - 首页（会在前端检查认证）
+    - 静态资源文件 (.ico, .css, .js, .png, .jpg, .svg, .woff, .woff2)
     """
     public_paths = [
         "/v1/",
@@ -207,7 +208,8 @@ def is_public_path(path: str) -> bool:
         "/auth/",
         "/docs",
         "/openapi.json",
-        "/redoc"
+        "/redoc",
+        "/favicon.ico",
     ]
 
     # 根路径需要返回 index.html，认证在前端处理
@@ -217,6 +219,11 @@ def is_public_path(path: str) -> bool:
     for public_path in public_paths:
         if path.startswith(public_path):
             return True
+
+    # 静态资源文件扩展名（不需要认证）
+    static_extensions = ('.ico', '.css', '.js', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.woff', '.woff2', '.ttf', '.eot')
+    if path.endswith(static_extensions):
+        return True
 
     return False
 

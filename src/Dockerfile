@@ -1,4 +1,5 @@
-# WAF Proxy Dockerfile
+# WAF Proxy Dockerfile v2.1
+# 企业级高可用: 站点优先降级 + 快速失败 + 半开状态
 # 基于 Playwright 官方镜像 (包含 Chromium)
 
 FROM mcr.microsoft.com/playwright/python:v1.57.0-noble
@@ -18,15 +19,22 @@ ENV PYTHONOPTIMIZE=1
 # 复制依赖文件
 COPY requirements.txt .
 
-# 配置 pip 使用清华镜像并安装依赖
-# 注意：必须在同一个 RUN 中 unset 代理，否则 build arg 会覆盖 ENV
-RUN pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple \
-    && unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy \
-    && pip install --no-cache-dir -r requirements.txt \
+# 构建时代理配置（用于 pip install）
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ENV HTTP_PROXY=$HTTP_PROXY
+ENV HTTPS_PROXY=$HTTPS_PROXY
+
+# 安装 Python 依赖
+RUN pip install --no-cache-dir -r requirements.txt \
     && pip install --no-cache-dir fastapi uvicorn httpx[http2]
 
-# 复制应用代码（包含新增的浏览器和Cookie管理器）
-COPY waf_proxy.py balance_api.py checkin_service.py checkin_api.py accounts_api.py auth_service.py auth_api.py api_key_validation.py browser_manager.py waf_cookie_manager.py config.py email_service.py ./
+# 清除代理环境变量（运行时不需要）
+ENV HTTP_PROXY=
+ENV HTTPS_PROXY=
+
+# 复制应用代码（v2 简化版 - 移除 WAF Cookie 管理和复杂熔断器）
+COPY waf_proxy.py balance_api.py checkin_service.py checkin_api.py accounts_api.py auth_service.py auth_api.py api_key_validation.py browser_manager.py config.py email_service.py site_manager.py ./
 
 # 复制静态文件目录
 COPY static/ ./static/
@@ -50,6 +58,11 @@ ENV API_KEY_VALIDATION_ENABLED=true
 # 主站优先恢复（定期检查主站健康状态，可用时自动切换回主站）
 ENV PRIMARY_SITE_CHECK_ENABLED=true
 ENV PRIMARY_SITE_CHECK_INTERVAL=5
+# v2.1 新增默认值
+ENV SITE_MANAGER_ENABLED=true
+ENV DEGRADATION_STRATEGY=site_first
+ENV FAST_FAIL_ENABLED=true
+ENV HALF_OPEN_ENABLED=true
 # HTTP_PROXY 由 docker-compose 设置
 
 # 暴露端口

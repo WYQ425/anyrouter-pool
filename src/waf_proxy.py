@@ -1,12 +1,28 @@
 """
-AnyRouter Proxy - 多账号负载均衡代理
+AnyRouter Proxy - 多账号负载均衡代理 v2.1
 
-企业级架构特性:
-- 常驻浏览器: 单例 Playwright 浏览器，避免重复启动
-- 智能缓存: WAF Cookie 30分钟缓存 + 预刷新机制
-- 并发安全: 防止多个请求同时刷新 Cookie
-- 自动恢复: 浏览器崩溃自动重连
-- 站点故障转移: 主站优先 + 自动切换备用站
+架构特性:
+- 多站点故障转移: 主站优先 + 自动切换备用站
+- 站点优先降级: 先换站点再换模型（用户请求的模型尽量满足）
+- 快速失败: 所有资源不可用时立即返回 503
+- 半开状态: 冷却期后渐进式恢复（10%放行）
+- 冷却抖动: 防止惊群效应
+- 并发控制: 信号量限制并发请求
+- 定期 GC: 防止内存泄漏
+- 邮件告警: 全站不可用时通知
+
+v2.1 变更:
+- 新增: 站点优先降级策略 (DEGRADATION_STRATEGY=site_first)
+- 新增: 快速失败机制 (FAST_FAIL_ENABLED)
+- 新增: 熔断器半开状态 (HALF_OPEN_ENABLED)
+- 新增: 冷却时间抖动 (COOLDOWN_JITTER_ENABLED)
+- 改进: 健康检测需要连续成功才切回主站
+
+v2 变更（简化）:
+- 移除: 常驻浏览器（改为按需创建/销毁）
+- 移除: WAF Cookie 缓存（API 请求不需要）
+- 移除: 复杂熔断器状态机（简化为 site_manager）
+- 新增: 模型降级功能
 """
 
 import asyncio
@@ -25,13 +41,13 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 from apscheduler.triggers.cron import CronTrigger
 
-# 导入新的浏览器和 Cookie 管理器
-from browser_manager import browser_manager
-from waf_cookie_manager import (
-    waf_cookie_manager,
-    get_waf_cookies,
-    refresh_waf_cookies,
-    WAF_COOKIE_TTL,
+# 导入新的站点管理器（替代 circuit_breaker）
+from site_manager import (
+    init_site_manager,
+    get_site_manager,
+    SITE_MANAGER_ENABLED,
+    DEGRADATION_STRATEGY,
+    FAST_FAIL_ENABLED,
 )
 
 # 导入余额查询路由
@@ -63,19 +79,15 @@ ACCOUNTS_FILE = Path(os.getenv("ACCOUNTS_FILE", _default_accounts_file))
 PROXY_PORT = int(os.getenv("WAF_PROXY_PORT", "18081"))
 HTTP_PROXY = os.getenv("HTTP_PROXY", "http://127.0.0.1:7890")
 
-# 站点配置：主站需要代理+WAF，备用站直接访问
+# 站点配置：主站优先（API 请求不需要 WAF），备用站作为后备
+# 注意：API 请求带 Authorization header 不会被 WAF 拦截
+# WAF cookies 仅在遇到 HTML 响应时动态获取
 SITES = [
     {
         "url": "https://anyrouter.top",
         "name": "主站",
         "use_proxy": True,
-        "need_waf": True
-    },
-    {
-        "url": "https://c.cspok.cn",
-        "name": "备用站1",
-        "use_proxy": False,
-        "need_waf": False
+        "need_waf": False  # API 请求默认不需要 WAF，遇到拦截时动态获取
     },
     {
         "url": "https://pmpjfbhq.cn-nb1.rainapp.top",
@@ -89,6 +101,7 @@ SITES = [
         "use_proxy": False,
         "need_waf": False
     }
+    # 备用站1 (c.cspok.cn) 已移除 - SSL 连接错误，不可用
 ]
 
 # 当前活跃站点索引
@@ -137,6 +150,8 @@ CHECKIN_CRON_MINUTE = os.getenv("CHECKIN_CRON_MINUTE", "30")  # 执行的分钟
 # 主站优先恢复配置
 PRIMARY_SITE_CHECK_ENABLED = os.getenv("PRIMARY_SITE_CHECK_ENABLED", "true").lower() == "true"
 PRIMARY_SITE_CHECK_INTERVAL = int(os.getenv("PRIMARY_SITE_CHECK_INTERVAL", "5"))  # 检查间隔（分钟）
+PRIMARY_SITE_CHECK_INTERVAL_URGENT = int(os.getenv("PRIMARY_SITE_CHECK_INTERVAL_URGENT", "1"))  # 紧急间隔
+PRIMARY_SITE_CHECK_REQUIRED_SUCCESSES = int(os.getenv("PRIMARY_SITE_CHECK_REQUIRED_SUCCESSES", "2"))  # 需要连续成功次数
 
 # 主站健康检查状态
 primary_site_status = {
@@ -144,14 +159,12 @@ primary_site_status = {
     "last_check_result": None,
     "last_recovery": None,
     "check_count": 0,
-    "recovery_count": 0
+    "recovery_count": 0,
+    "consecutive_successes": 0,  # v2.1 新增：连续成功计数
 }
 
 # 账号列表
 accounts = []
-
-# 后台刷新任务
-_background_refresh_task = None
 
 # 账号健康状态追踪
 account_health = {}  # {account_name: {"fail_count": int, "last_fail": timestamp, "disabled_until": timestamp}}
@@ -261,12 +274,16 @@ async def scheduled_checkin():
     """定时签到任务"""
     from datetime import datetime
     logger.info(f"Scheduled check-in started at {datetime.now().isoformat()}")
+
+    # 立即更新下次运行时间（避免签到过程中显示错误的时间）
+    checkin_job = scheduler.get_job("scheduled_checkin")
+    if checkin_job and checkin_job.next_run_time:
+        checkin_status["next_run"] = checkin_job.next_run_time.isoformat()
+        logger.info(f"Next scheduled check-in: {checkin_status['next_run']}")
+
     try:
         result = await run_checkin_for_all_accounts()
         logger.info(f"Scheduled check-in completed: {result.get('message', 'Unknown')}")
-        # 更新下次运行时间
-        next_run = scheduler.get_jobs()[0].next_run_time if scheduler.get_jobs() else None
-        checkin_status["next_run"] = next_run.isoformat() if next_run else None
     except Exception as e:
         logger.error(f"Scheduled check-in failed: {e}")
 
@@ -278,7 +295,7 @@ async def check_primary_site_health():
     优化点：
     1. 使用 HEAD 请求代替 GET，减少数据传输
     2. 更短的超时时间
-    3. 复用现有 WAF cookies，不触发新的浏览器操作
+    3. 携带 Authorization header 避免 WAF 拦截
     """
     from datetime import datetime
 
@@ -286,22 +303,29 @@ async def check_primary_site_health():
     primary_site_status["last_check"] = datetime.now().isoformat()
     primary_site_status["check_count"] += 1
 
-    try:
-        # 复用现有 WAF cookies（不强制刷新，避免浏览器操作）
-        cookies = waf_cookie_manager.cookies if waf_cookie_manager.is_valid else {}
+    # 获取一个账号的 API key 用于健康检查
+    check_account = get_next_account()
+    if not check_account:
+        logger.warning("[Primary Check] No account available for health check")
+        primary_site_status["last_check_result"] = "no_account"
+        return False
 
+    api_key = check_account.get("api_key", "")
+
+    try:
         # 使用 HEAD 请求进行轻量级检查
+        # 携带 Authorization header 避免 WAF 拦截
         async with httpx.AsyncClient(
             http2=False,
             timeout=httpx.Timeout(connect=5.0, read=10.0, write=5.0, pool=5.0),
             proxy=HTTP_PROXY if primary_site.get("use_proxy") else None,
-            cookies=cookies
         ) as client:
-            # HEAD 请求比 GET 更轻量
             response = await client.head(
                 f"{primary_site['url']}/v1/models",
                 headers={
                     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                    "Authorization": f"Bearer {api_key}",
+                    "x-api-key": api_key,
                 },
                 follow_redirects=True
             )
@@ -330,13 +354,21 @@ async def check_primary_site_health():
 
 
 async def scheduled_primary_site_check():
-    """定时主站健康检查任务"""
+    """
+    定时主站健康检查任务 v2.1
+
+    改进：
+    1. 需要连续成功 N 次才切换回主站
+    2. 不在主站时使用更短的检查间隔
+    """
     global current_site_index, site_fail_count
     from datetime import datetime
 
     # 如果当前已经在主站，不需要检查
     if current_site_index == 0:
         logger.debug("[Primary Check] Already using primary site, skip check")
+        # 重置连续成功计数
+        primary_site_status["consecutive_successes"] = 0
         return
 
     logger.info(f"[Primary Check] Checking primary site health (current: {SITES[current_site_index]['name']})")
@@ -344,53 +376,52 @@ async def scheduled_primary_site_check():
     is_healthy = await check_primary_site_health()
 
     if is_healthy:
-        old_site = SITES[current_site_index]
-        current_site_index = 0
-        site_fail_count = 0
-        primary_site_status["last_recovery"] = datetime.now().isoformat()
-        primary_site_status["recovery_count"] += 1
-        logger.info(f"[Primary Check] Primary site is healthy! Switching from {old_site['name']} back to {SITES[0]['name']}")
+        primary_site_status["consecutive_successes"] += 1
+        logger.info(
+            f"[Primary Check] Primary site healthy "
+            f"({primary_site_status['consecutive_successes']}/{PRIMARY_SITE_CHECK_REQUIRED_SUCCESSES} consecutive successes)"
+        )
+
+        # 检查是否达到连续成功要求
+        if primary_site_status["consecutive_successes"] >= PRIMARY_SITE_CHECK_REQUIRED_SUCCESSES:
+            old_site = SITES[current_site_index]
+            current_site_index = 0
+            site_fail_count = 0
+            primary_site_status["last_recovery"] = datetime.now().isoformat()
+            primary_site_status["recovery_count"] += 1
+            primary_site_status["consecutive_successes"] = 0
+            logger.info(
+                f"[Primary Check] Primary site recovered! "
+                f"Switching from {old_site['name']} back to {SITES[0]['name']}"
+            )
     else:
+        # 健康检查失败，重置连续成功计数
+        primary_site_status["consecutive_successes"] = 0
         logger.info(f"[Primary Check] Primary site still unavailable, staying on {SITES[current_site_index]['name']}")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期管理"""
-    global _background_refresh_task
+    """应用生命周期管理 v2 - 简化版"""
 
     # ============== 启动阶段 ==============
     logger.info("=" * 60)
-    logger.info("AnyRouter Proxy starting...")
+    logger.info("AnyRouter Proxy v2 starting...")
     logger.info("=" * 60)
 
-    # 1. 启动常驻浏览器
-    logger.info("[Startup] Starting persistent browser...")
-    browser_started = await browser_manager.start()
-    if not browser_started:
-        logger.error("[Startup] Failed to start browser! WAF bypass may not work.")
-    else:
-        logger.info("[Startup] Browser started successfully")
-
-    # 2. 加载账号
+    # 1. 加载账号
     load_accounts()
     logger.info(f"[Startup] Loaded {len(accounts)} accounts")
 
-    # 3. 预热 WAF Cookie（首次获取）
-    logger.info("[Startup] Pre-warming WAF cookies...")
-    try:
-        cookies = await get_waf_cookies()
-        logger.info(f"[Startup] WAF cookies ready: {list(cookies.keys())}")
-    except Exception as e:
-        logger.error(f"[Startup] Failed to get initial WAF cookies: {e}")
+    # 2. 初始化站点管理器
+    if SITE_MANAGER_ENABLED:
+        logger.info("[Startup] Initializing site manager...")
+        site_manager = init_site_manager(SITES)
+        logger.info("[Startup] Site manager initialized")
+    else:
+        logger.info("[Startup] Site manager disabled")
 
-    # 4. 启动后台 Cookie 刷新任务（预刷新机制）
-    logger.info("[Startup] Starting background cookie refresh task...")
-    _background_refresh_task = asyncio.create_task(
-        waf_cookie_manager.start_background_refresh()
-    )
-
-    # 5. 配置定时任务
+    # 3. 配置定时任务
     # 签到任务
     if CHECKIN_ENABLED:
         scheduler.add_job(
@@ -425,10 +456,10 @@ async def lifespan(app: FastAPI):
     logger.info("-" * 60)
     logger.info(f"[Config] Base URL: {ANYROUTER_BASE_URL}")
     logger.info(f"[Config] HTTP Proxy: {HTTP_PROXY}")
-    logger.info(f"[Config] WAF Cookie TTL: {WAF_COOKIE_TTL}s")
     logger.info(f"[Config] Primary site preferred: Yes")
+    logger.info(f"[Config] Model degradation: {'enabled' if SITE_MANAGER_ENABLED else 'disabled'}")
     logger.info("-" * 60)
-    logger.info("AnyRouter Proxy started successfully!")
+    logger.info("AnyRouter Proxy v2 started successfully!")
     logger.info("=" * 60)
 
     yield  # ============== 应用运行中 ==============
@@ -437,23 +468,10 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("AnyRouter Proxy shutting down...")
 
-    # 1. 停止后台刷新任务
-    if _background_refresh_task:
-        _background_refresh_task.cancel()
-        try:
-            await _background_refresh_task
-        except asyncio.CancelledError:
-            pass
-        logger.info("[Shutdown] Background refresh task stopped")
-
-    # 2. 停止调度器
+    # 停止调度器
     if scheduler.running:
         scheduler.shutdown()
         logger.info("[Shutdown] Scheduler stopped")
-
-    # 3. 关闭浏览器
-    await browser_manager.stop()
-    logger.info("[Shutdown] Browser stopped")
 
     logger.info("AnyRouter Proxy stopped")
     logger.info("=" * 60)
@@ -493,9 +511,10 @@ async def root():
 
 @app.get("/health")
 async def health():
-    """健康检查 - 返回详细的系统状态"""
+    """健康检查 - 返回详细的系统状态 v2"""
     from datetime import datetime
     current_site = get_current_site()
+    site_manager = get_site_manager()
 
     # 计算账号健康统计
     healthy_accounts = get_healthy_accounts()
@@ -512,10 +531,11 @@ async def health():
     return {
         "status": "ok",
         "timestamp": datetime.now().isoformat(),
-        "accounts": get_total_accounts_count(),  # 所有账号数量（用于 Dashboard 显示）
-        "active_accounts": len(accounts),  # 有 API Key 且启用的账号（用于负载均衡）
+        "version": "v2",  # 标记版本
+        "accounts": get_total_accounts_count(),
+        "active_accounts": len(accounts),
 
-        # 账号健康状态（新增）
+        # 账号健康状态
         "account_health": {
             "total": get_total_accounts_count(),
             "active": len(accounts),
@@ -526,12 +546,11 @@ async def health():
             "disable_duration_seconds": ACCOUNT_DISABLE_DURATION
         },
 
-        # 站点状态
+        # 站点状态（简化版）
         "sites": {
             "current": current_site["name"],
             "current_url": current_site["url"],
             "use_proxy": current_site["use_proxy"],
-            "need_waf": current_site["need_waf"],
             "fail_count": site_fail_count,
             "total_sites": len(SITES),
             "is_primary": current_site_index == 0,
@@ -549,12 +568,6 @@ async def health():
             "recovery_count": primary_site_status.get("recovery_count", 0)
         },
 
-        # 浏览器状态（新增）
-        "browser": browser_manager.stats,
-
-        # WAF Cookie 状态（新增，更详细）
-        "waf_cookies": waf_cookie_manager.stats,
-
         # 代理配置
         "proxy": HTTP_PROXY,
 
@@ -566,6 +579,9 @@ async def health():
 
         # API Key 验证
         "api_key_validation": get_validation_stats(),
+
+        # 站点管理器状态（替代旧的 circuit_breaker）
+        "site_manager": site_manager.get_status() if site_manager else {"enabled": False},
 
         # 签到状态
         "checkin": {
@@ -594,41 +610,14 @@ async def clear_api_key_cache():
     return {"status": "ok", "message": "API key validation cache cleared"}
 
 
-@app.post("/refresh-waf")
-async def refresh_waf():
-    """强制刷新 WAF cookies"""
-    try:
-        cookies = await waf_cookie_manager.force_refresh()
-        return {
-            "status": "ok",
-            "cookies": list(cookies.keys()),
-            "ttl_seconds": waf_cookie_manager.ttl,
-            "state": waf_cookie_manager.state.value
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e),
-            "state": waf_cookie_manager.state.value
-        }
-
-
-@app.post("/restart-browser")
-async def restart_browser():
-    """重启常驻浏览器（用于故障恢复或内存清理）"""
-    try:
-        await browser_manager.restart()
-        return {
-            "status": "ok",
-            "message": "Browser restarted successfully",
-            "browser": browser_manager.stats
-        }
-    except Exception as e:
-        return {
-            "status": "error",
-            "message": str(e),
-            "browser": browser_manager.stats
-        }
+@app.post("/force-gc")
+async def force_gc():
+    """手动触发垃圾回收"""
+    site_manager = get_site_manager()
+    if site_manager:
+        site_manager.force_gc()
+        return {"status": "ok", "message": "GC triggered"}
+    return {"status": "error", "message": "Site manager not initialized"}
 
 
 @app.post("/switch-to-primary")
@@ -688,10 +677,62 @@ async def force_switch_to_primary():
     }
 
 
+@app.post("/reset-site-manager")
+async def reset_site_manager():
+    """重置站点管理器（重置所有站点状态和模型降级）"""
+    site_manager = get_site_manager()
+    if not site_manager:
+        return {"status": "error", "message": "Site manager not initialized"}
+
+    site_manager.reset_all()
+    return {
+        "status": "ok",
+        "message": "Site manager reset",
+        "site_manager": site_manager.get_status()
+    }
+
+
 @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 async def proxy(request: Request, path: str):
-    """代理 /v1/* 请求到 AnyRouter，支持多站点和多账号故障转移"""
+    """
+    代理 /v1/* 请求到 AnyRouter v2.1
+
+    特性:
+    - 多站点故障转移
+    - 多账号负载均衡
+    - 模型降级（负载过高时自动切换）
+    - 快速失败（所有资源不可用时立即返回）
+    - 站点优先降级（先换站点再换模型）
+    """
     global current_site_index
+
+    site_manager = get_site_manager()
+
+    # 并发控制检查
+    if site_manager and SITE_MANAGER_ENABLED:
+        can_proceed = await site_manager.acquire()
+        if not can_proceed:
+            raise HTTPException(
+                status_code=503,
+                detail="Service temporarily unavailable - concurrent request limit reached"
+            )
+
+    # v2.1: 快速失败检查 - 所有站点不可用
+    if site_manager and SITE_MANAGER_ENABLED and FAST_FAIL_ENABLED:
+        has_site, site_retry = site_manager.has_any_available_site()
+        if not has_site:
+            logger.warning(f"[FastFail] All sites unavailable, retry after {site_retry}s")
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": {
+                        "type": "service_unavailable",
+                        "message": f"所有上游服务当前不可用，请 {site_retry} 秒后重试",
+                        "retry_after": site_retry,
+                    }
+                },
+                headers={"Retry-After": str(site_retry)}
+            )
 
     # API Key 验证（如果启用）
     if is_validation_enabled():
@@ -712,24 +753,56 @@ async def proxy(request: Request, path: str):
     # 获取请求体（只读取一次）
     body = await request.body()
 
-    # 检查是否是流式请求
+    # 解析请求体
     try:
         body_json = json.loads(body) if body else {}
         is_stream = body_json.get("stream", False)
+        requested_model = body_json.get("model", "unknown")
     except:
         is_stream = False
         body_json = {}
+        requested_model = "unknown"
 
-    # 详细记录请求信息（用于调试）
-    request_keys = list(body_json.keys()) if body_json else []
-    has_thinking = "thinking" in body_json
-    logger.info(f"Request body keys: {request_keys}, has_thinking: {has_thinking}, model: {body_json.get('model', 'unknown')}")
+    # v2.1: 快速失败检查 - 所有模型不可用（针对特定请求模型）
+    if site_manager and SITE_MANAGER_ENABLED and FAST_FAIL_ENABLED:
+        has_model, model_retry = site_manager.has_any_available_model()
+        if not has_model:
+            logger.warning(f"[FastFail] All models unavailable, retry after {model_retry}s")
+            return JSONResponse(
+                status_code=503,
+                content={
+                    "error": {
+                        "type": "service_unavailable",
+                        "message": f"所有模型当前负载过高，请 {model_retry} 秒后重试",
+                        "retry_after": model_retry,
+                    }
+                },
+                headers={"Retry-After": str(model_retry)}
+            )
+
+    # v2.1: 根据降级策略选择处理方式
+    if site_manager and SITE_MANAGER_ENABLED and DEGRADATION_STRATEGY == "site_first":
+        # 站点优先降级：获取模型降级列表，但不预先替换
+        model_candidates = site_manager.get_model_fallback_list(requested_model)
+        effective_model = requested_model  # 先使用原模型
+        logger.info(f"[SiteFirst] Model candidates: {model_candidates}")
+    else:
+        # 原有逻辑：模型优先降级
+        effective_model = requested_model
+        if site_manager and SITE_MANAGER_ENABLED:
+            effective_model = site_manager.get_effective_model(requested_model)
+            if effective_model != requested_model:
+                body_json["model"] = effective_model
+                body = json.dumps(body_json).encode("utf-8")
+                logger.info(f"[ModelFirst] Using fallback model: {requested_model} -> {effective_model}")
+        model_candidates = [effective_model]
+
+    logger.info(f"Request: model={effective_model}, stream={is_stream}, strategy={DEGRADATION_STRATEGY}")
 
     # 账号故障转移：最多尝试 3 个不同的账号
     MAX_ACCOUNT_RETRIES = 3
     tried_account_names = []
     last_error = None
-    account_error = False  # 标记是否是账号相关的错误
 
     for account_attempt in range(MAX_ACCOUNT_RETRIES):
         # 获取账号（排除已尝试过的）
@@ -737,23 +810,16 @@ async def proxy(request: Request, path: str):
         if not account:
             if account_attempt == 0:
                 raise HTTPException(status_code=503, detail="No available accounts")
-            break  # 没有更多账号可尝试
+            break
 
         account_name = account.get("name", account.get("email", "unknown"))
         tried_account_names.append(account_name)
 
         if account_attempt > 0:
-            logger.info(f"Account failover: trying account {account_name} (attempt {account_attempt + 1}/{MAX_ACCOUNT_RETRIES})")
+            logger.info(f"Account failover: trying {account_name} (attempt {account_attempt + 1}/{MAX_ACCOUNT_RETRIES})")
 
-        # 记录接收到的请求头（用于调试）
-        incoming_headers = {k: v for k, v in request.headers.items() if k.lower().startswith("anthropic")}
-        logger.info(f"Incoming anthropic headers: {incoming_headers}")
-
-        # 构建请求头（每个账号需要重新构建）
+        # 构建请求头
         api_key = account.get("api_key", "")
-        key_preview = api_key[:8] + "..." if len(api_key) > 8 else api_key
-        logger.info(f"Using account {account_name} with key {key_preview}")
-
         headers = {
             "Content-Type": request.headers.get("content-type", "application/json"),
             "Authorization": f"Bearer {api_key}",
@@ -767,298 +833,248 @@ async def proxy(request: Request, path: str):
             if key.lower().startswith("anthropic-") and key.lower() not in headers:
                 headers[key] = value
 
-        # 尝试所有站点（从当前活跃站点开始）
-        tried_sites = 0
-        start_index = current_site_index
-        account_error = False
+        # v2.1: 站点优先降级 - 外层循环模型，内层循环站点
+        tried_combinations = set()
+        model_overload_on_all_sites = False
 
-        while tried_sites < len(SITES):
-            site_index = (start_index + tried_sites) % len(SITES)
-            site = SITES[site_index]
+        for current_model in model_candidates:
+            if model_overload_on_all_sites and current_model == model_candidates[0]:
+                # 原模型在所有站点都过载，跳过（已经尝试过了）
+                continue
 
-            # 构建目标 URL
-            target_url = f"{site['url']}/v1/{path}"
-            if request.query_params:
-                target_url += f"?{request.query_params}"
+            # 更新请求体中的模型
+            if current_model != body_json.get("model"):
+                body_json["model"] = current_model
+                body = json.dumps(body_json).encode("utf-8")
+                if current_model != requested_model:
+                    logger.info(f"[SiteFirst] Switching to fallback model: {requested_model} -> {current_model}")
 
-            logger.info(f"Trying {site['name']} ({site['url']}) for account {account_name}")
-            logger.info(f"Request type: {'stream' if is_stream else 'normal'}, model: {body_json.get('model', 'unknown')}")
+            # 尝试所有可用站点
+            available_sites = site_manager.get_available_sites() if site_manager else SITES
+            sites_tried_for_model = 0
+            model_overload_count = 0
 
-            # 根据站点配置决定是否使用代理和 WAF cookies
-            use_proxy = site.get("use_proxy", False)
-            need_waf = site.get("need_waf", False)
+            # v2.1: 初始化错误状态（必须在 site 循环外部，防止 available_sites 为空时 UnboundLocalError）
+            account_error = False
+            model_overload = False
 
-            cookies = {}
-            if need_waf:
-                cookies = await get_waf_cookies()
+            for site in available_sites:
+                combination = (site["name"], current_model)
+                if combination in tried_combinations:
+                    continue
+                tried_combinations.add(combination)
+                sites_tried_for_model += 1
 
-            proxy_config = HTTP_PROXY if use_proxy else None
+                # 构建目标 URL
+                target_url = f"{site['url']}/v1/{path}"
+                if request.query_params:
+                    target_url += f"?{request.query_params}"
 
-            # 重试次数：需要 WAF 的站点多重试几次（因为可能遇到负载限制需要排队）
-            max_retries = 4 if need_waf else 2
+                logger.info(f"[{site['name']}] Trying account={account_name}, model={current_model}")
 
-            for attempt in range(max_retries):
-                try:
-                    # 流式请求需要保持 client 活跃直到流完成
-                    if is_stream:
-                        # 创建不使用 async with 的 client，手动管理生命周期
-                        client = httpx.AsyncClient(
-                            http2=False,
-                            timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0),
-                            proxy=proxy_config,
-                            cookies=cookies
-                        )
+                # 代理配置
+                proxy_config = HTTP_PROXY if site.get("use_proxy", False) else None
+                max_retries = 2
 
-                        try:
-                            response = await client.send(
-                                client.build_request(
+                # 重置每个站点的错误状态
+                account_error = False
+                model_overload = False
+
+                for attempt in range(max_retries):
+                    try:
+                        if is_stream:
+                            # 流式请求
+                            client = httpx.AsyncClient(
+                                http2=False,
+                                timeout=httpx.Timeout(connect=30.0, read=300.0, write=30.0, pool=30.0),
+                                proxy=proxy_config
+                            )
+
+                            try:
+                                response = await client.send(
+                                    client.build_request(
+                                        method=request.method,
+                                        url=target_url,
+                                        headers=headers,
+                                        content=body
+                                    ),
+                                    stream=True
+                                )
+
+                                # 检查响应状态
+                                if response.status_code == 401 or response.status_code == 403:
+                                    error_body = await response.aread()
+                                    await response.aclose()
+                                    await client.aclose()
+                                    account_error = True
+                                    logger.warning(f"[{site['name']}] Account auth error: {response.status_code}")
+                                    raise httpx.HTTPStatusError(f"Auth error: {response.status_code}", request=None, response=response)
+
+                                if response.status_code >= 500:
+                                    error_body = await response.aread()
+                                    error_str = error_body.decode('utf-8', errors='ignore')[:500]
+                                    await response.aclose()
+                                    await client.aclose()
+
+                                    logger.warning(f"[{site['name']}] Server error {response.status_code}: {error_str[:100]}")
+
+                                    # v2.1: 检查是否是模型负载限制
+                                    if "负载已经达到上限" in error_str or "rate limit" in error_str.lower():
+                                        model_overload = True
+                                        model_overload_count += 1
+                                        logger.info(f"[SiteFirst] {current_model} overloaded at {site['name']} ({model_overload_count}/{len(available_sites)} sites)")
+
+                                        # v2.1 站点优先：记录模型在此站点过载，但不立即切换模型
+                                        # 继续尝试下一个站点的同一模型
+                                        if site_manager:
+                                            site_manager.record_model_load_limit(current_model)
+
+                                        raise httpx.HTTPStatusError(f"Model overload: {response.status_code}", request=None, response=response)
+
+                                    raise httpx.HTTPStatusError(f"Server error: {response.status_code}", request=None, response=response)
+
+                                # 成功！
+                                record_site_success()
+                                record_account_success(account_name)
+                                if site_manager:
+                                    site_manager.record_site_success(site["url"])
+                                    site_manager.record_model_success(current_model)
+
+                                if current_model != requested_model:
+                                    logger.info(f"[SiteFirst] Success with fallback model: {requested_model} -> {current_model} @ {site['name']}")
+                                else:
+                                    logger.info(f"[{site['name']}] Success with original model: {current_model}")
+
+                                async def stream_response():
+                                    chunk_count = 0
+                                    total_bytes = 0
+                                    try:
+                                        async for chunk in response.aiter_bytes():
+                                            chunk_count += 1
+                                            total_bytes += len(chunk)
+                                            yield chunk
+                                        logger.info(f"[{site['name']}] Stream completed: {chunk_count} chunks, {total_bytes} bytes")
+                                    except Exception as e:
+                                        logger.error(f"[{site['name']}] Stream error: {e}")
+                                        raise
+                                    finally:
+                                        await response.aclose()
+                                        await client.aclose()
+
+                                return StreamingResponse(
+                                    stream_response(),
+                                    status_code=response.status_code,
+                                    media_type="text/event-stream",
+                                    headers={
+                                        k: v for k, v in response.headers.items()
+                                        if k.lower() not in ["content-length", "transfer-encoding", "content-encoding"]
+                                    }
+                                )
+                            except Exception as e:
+                                await client.aclose()
+                                raise
+                        else:
+                            # 普通请求
+                            async with httpx.AsyncClient(
+                                http2=False,
+                                timeout=httpx.Timeout(connect=30.0, read=60.0, write=30.0, pool=30.0),
+                                proxy=proxy_config
+                            ) as client:
+                                response = await client.request(
                                     method=request.method,
                                     url=target_url,
                                     headers=headers,
                                     content=body
-                                ),
-                                stream=True
-                            )
-
-                            # 检查是否被 WAF 拦截（返回 HTML）
-                            content_type = response.headers.get("content-type", "")
-                            if "text/html" in content_type:
-                                await response.aclose()
-                                await client.aclose()
-                                if need_waf:
-                                    logger.warning(f"[{site['name']}] WAF challenge detected, refreshing cookies...")
-                                    cookies = await refresh_waf_cookies()
-                                    continue
-                                else:
-                                    raise httpx.HTTPStatusError(
-                                        "Unexpected HTML response",
-                                        request=None,
-                                        response=response
-                                    )
-
-                            # 检查响应状态 - 区分账号错误和服务器错误
-                            if response.status_code == 401 or response.status_code == 403:
-                                error_body = await response.aread()
-                                await response.aclose()
-                                await client.aclose()
-                                account_error = True
-                                logger.warning(f"[{site['name']}] Account auth error: {response.status_code}, body: {error_body[:500]}")
-                                raise httpx.HTTPStatusError(
-                                    f"Account auth error: {response.status_code}",
-                                    request=None,
-                                    response=response
                                 )
 
-                            if response.status_code >= 500:
-                                error_body = await response.aread()
-                                error_body_str = error_body.decode('utf-8', errors='ignore')[:500]
-                                await response.aclose()
-                                await client.aclose()
-                                # 记录详细错误信息
-                                logger.warning(f"[{site['name']}] Server error {response.status_code} for account {account_name}, body: {error_body_str}")
+                                content_type = response.headers.get("content-type", "")
 
-                                # 检查是否是 500 空 body（可能是 WAF 拦截导致的）
-                                if need_waf and len(error_body_str.strip()) == 0:
-                                    logger.warning(f"[{site['name']}] Empty 500 response, might be WAF issue, refreshing cookies...")
-                                    cookies = await refresh_waf_cookies()
-                                    if attempt < max_retries - 1:
-                                        continue
-
-                                # 检查是否是模型负载限制
-                                if "负载已经达到上限" in error_body_str or "rate limit" in error_body_str.lower():
-                                    # 先尝试等待重试一次
-                                    if attempt == 0:
-                                        wait_time = 2
-                                        logger.info(f"[{site['name']}] Model at capacity, waiting {wait_time}s before retry...")
-                                        await asyncio.sleep(wait_time)
-                                        continue
-                                    # 如果第一次重试还是失败，尝试切换账号
-                                    logger.warning(f"[{site['name']}] Account {account_name} at capacity, trying another account...")
+                                # 检查响应状态
+                                if response.status_code == 401 or response.status_code == 403:
                                     account_error = True
-                                    raise httpx.HTTPStatusError(
-                                        f"Account at capacity: {response.status_code}",
-                                        request=None,
-                                        response=response
-                                    )
+                                    logger.warning(f"[{site['name']}] Account auth error: {response.status_code}")
+                                    raise httpx.HTTPStatusError(f"Auth error: {response.status_code}", request=None, response=response)
 
-                                account_error = True
-                                raise httpx.HTTPStatusError(
-                                    f"Server error: {response.status_code}",
-                                    request=None,
-                                    response=response
-                                )
+                                if response.status_code >= 500:
+                                    error_body = response.text[:500] if response.text else ""
+                                    logger.warning(f"[{site['name']}] Server error {response.status_code}: {error_body[:100]}")
 
-                            # 成功 - 更新状态
-                            if site_index != current_site_index:
-                                current_site_index = site_index
-                                logger.info(f"Switched to {site['name']} as current site")
-                            record_site_success()
-                            record_account_success(account_name)
+                                    # v2.1: 检查是否是模型负载限制
+                                    if "负载已经达到上限" in error_body or "rate limit" in error_body.lower():
+                                        model_overload = True
+                                        model_overload_count += 1
+                                        logger.info(f"[SiteFirst] {current_model} overloaded at {site['name']} ({model_overload_count}/{len(available_sites)} sites)")
 
-                            async def stream_response():
-                                chunk_count = 0
-                                total_bytes = 0
-                                try:
-                                    async for chunk in response.aiter_bytes():
-                                        chunk_count += 1
-                                        total_bytes += len(chunk)
-                                        yield chunk
-                                    logger.info(f"[{site['name']}] Stream completed: {chunk_count} chunks, {total_bytes} bytes, account={account_name}")
-                                except Exception as e:
-                                    logger.error(f"[{site['name']}] Stream error after {chunk_count} chunks, {total_bytes} bytes: {e}")
-                                    raise
-                                finally:
-                                    await response.aclose()
-                                    await client.aclose()
+                                        # v2.1 站点优先：记录模型在此站点过载，但不立即切换模型
+                                        if site_manager:
+                                            site_manager.record_model_load_limit(current_model)
 
-                            return StreamingResponse(
-                                stream_response(),
-                                status_code=response.status_code,
-                                media_type="text/event-stream",
-                                headers={
-                                    k: v for k, v in response.headers.items()
-                                    if k.lower() not in ["content-length", "transfer-encoding", "content-encoding"]
-                                }
-                            )
-                        except Exception as e:
-                            await client.aclose()
-                            raise
-                    else:
-                        # 普通响应 - 使用 async with 管理 client 生命周期
-                        async with httpx.AsyncClient(
-                            http2=False,
-                            timeout=httpx.Timeout(connect=30.0, read=60.0, write=30.0, pool=30.0),
-                            proxy=proxy_config,
-                            cookies=cookies
-                        ) as client:
-                            response = await client.request(
-                                method=request.method,
-                                url=target_url,
-                                headers=headers,
-                                content=body
-                            )
+                                        raise httpx.HTTPStatusError(f"Model overload: {response.status_code}", request=None, response=response)
 
-                            # 检查是否被 WAF 拦截
-                            content_type = response.headers.get("content-type", "")
-                            if "text/html" in content_type and response.status_code == 200:
-                                if need_waf:
-                                    logger.warning(f"[{site['name']}] WAF challenge detected, refreshing cookies...")
-                                    cookies = await refresh_waf_cookies()
-                                    continue
+                                    raise httpx.HTTPStatusError(f"Server error: {response.status_code}", request=None, response=response)
+
+                                # 成功！
+                                record_site_success()
+                                record_account_success(account_name)
+                                if site_manager:
+                                    site_manager.record_site_success(site["url"])
+                                    site_manager.record_model_success(current_model)
+
+                                if current_model != requested_model:
+                                    logger.info(f"[SiteFirst] Success with fallback model: {requested_model} -> {current_model} @ {site['name']}")
                                 else:
-                                    raise httpx.HTTPStatusError(
-                                        "Unexpected HTML response",
-                                        request=None,
-                                        response=response
-                                    )
+                                    logger.info(f"[{site['name']}] Success with original model: {current_model}")
 
-                            # 检查响应状态 - 区分账号错误和服务器错误
-                            if response.status_code == 401 or response.status_code == 403:
-                                account_error = True
-                                logger.warning(f"[{site['name']}] Account auth error: {response.status_code}, body: {response.text[:500]}")
-                                raise httpx.HTTPStatusError(
-                                    f"Account auth error: {response.status_code}",
-                                    request=None,
-                                    response=response
-                                )
+                                logger.info(f"[{site['name']}] Response: status={response.status_code}, size={len(response.content)} bytes")
 
-                            if response.status_code >= 500:
-                                # 记录详细错误信息以便诊断
-                                error_body = response.text[:500] if response.text else ""
-                                logger.warning(f"[{site['name']}] Server error {response.status_code} for account {account_name}, body: {error_body}")
+                                if "json" in content_type:
+                                    return JSONResponse(content=response.json(), status_code=response.status_code)
+                                else:
+                                    return JSONResponse(content={"raw": response.text}, status_code=response.status_code)
 
-                                # 检查是否是 500 空 body（可能是 WAF 拦截导致的）
-                                if need_waf and len(error_body.strip()) == 0:
-                                    logger.warning(f"[{site['name']}] Empty 500 response, might be WAF issue, refreshing cookies...")
-                                    cookies = await refresh_waf_cookies()
-                                    if attempt < max_retries - 1:
-                                        continue
+                    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ReadError, httpx.HTTPStatusError) as e:
+                        last_error = e
+                        error_type = "model_overload" if model_overload else "site_error"
+                        logger.warning(f"[{site['name']}] Request failed ({error_type}, attempt {attempt + 1}/{max_retries}): {e}")
 
-                                # 检查是否是模型负载限制
-                                if "负载已经达到上限" in error_body or "rate limit" in error_body.lower():
-                                    # 先尝试等待重试一次
-                                    if attempt == 0:
-                                        wait_time = 2
-                                        logger.info(f"[{site['name']}] Model at capacity, waiting {wait_time}s before retry...")
-                                        await asyncio.sleep(wait_time)
-                                        continue
-                                    # 如果第一次重试还是失败，尝试切换账号
-                                    logger.warning(f"[{site['name']}] Account {account_name} at capacity, trying another account...")
-                                    account_error = True
-                                    raise httpx.HTTPStatusError(
-                                        f"Account at capacity: {response.status_code}",
-                                        request=None,
-                                        response=response
-                                    )
+                        if account_error:
+                            # 账号错误，立即停止当前账号的尝试
+                            break
 
-                                # 其他 500 错误可能是账号问题，尝试切换账号
-                                account_error = True
-                                raise httpx.HTTPStatusError(
-                                    f"Server error: {response.status_code}",
-                                    request=None,
-                                    response=response
-                                )
+                        if model_overload:
+                            # v2.1 站点优先：模型过载不重试，直接尝试下一个站点
+                            break
 
-                            # 成功 - 更新状态
-                            if site_index != current_site_index:
-                                current_site_index = site_index
-                                logger.info(f"Switched to {site['name']} as current site")
-                            record_site_success()
-                            record_account_success(account_name)
+                        if attempt < max_retries - 1:
+                            continue
+                        else:
+                            break
 
-                            # 正常返回
-                            logger.info(f"[{site['name']}] Normal response: status={response.status_code}, content-type={content_type}, size={len(response.content)} bytes, account={account_name}")
-                            if "json" in content_type:
-                                return JSONResponse(
-                                    content=response.json(),
-                                    status_code=response.status_code
-                                )
-                            else:
-                                return JSONResponse(
-                                    content={"raw": response.text},
-                                    status_code=response.status_code
-                                )
+                    except Exception as e:
+                        last_error = e
+                        logger.error(f"[{site['name']}] Proxy error: {e}")
+                        break
 
-                except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, httpx.ReadError, httpx.HTTPStatusError) as e:
-                    last_error = e
-                    logger.warning(f"[{site['name']}] Request failed (attempt {attempt + 1}/{max_retries}): {e}")
+                # 当前站点所有重试都失败
+                if not model_overload:
+                    # 非模型过载的站点失败才记录
+                    logger.warning(f"[{site['name']}] All retries failed for account {account_name}")
+                    record_site_failure()
+                    if site_manager:
+                        site_manager.record_site_failure(site["url"], str(last_error)[:100] if last_error else "")
 
-                    # 如果是账号错误，立即停止重试，尝试其他账号
-                    if account_error:
-                        logger.info(f"[{site['name']}] Account error detected, stopping retries for {account_name}")
-                        break  # 退出重试循环，然后会跳出站点循环尝试其他账号
+                if account_error:
+                    # 账号认证错误，标记账号失败并停止
+                    record_account_failure(account_name)
+                    break
 
-                    # 只有连接错误才刷新 cookie（可能是 WAF 拦截导致的）
-                    # 500 错误不刷新 cookie，直接重试
-                    is_connection_error = isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout))
-                    if attempt < max_retries - 1:
-                        if is_connection_error and need_waf:
-                            # 连接错误可能是 WAF 问题，刷新 cookie
-                            cookies = await refresh_waf_cookies()
-                        # 其他错误直接重试，不刷新 cookie
-                        continue
-                    else:
-                        break  # 退出重试循环，尝试下一个站点
+            # v2.1: 检查当前模型是否在所有站点都过载
+            if model_overload_count >= sites_tried_for_model and sites_tried_for_model > 0:
+                model_overload_on_all_sites = True
+                logger.info(f"[SiteFirst] {current_model} overloaded on all {sites_tried_for_model} sites, trying next model...")
 
-                except Exception as e:
-                    last_error = e
-                    logger.error(f"[{site['name']}] Proxy error: {e}")
-                    break  # 退出重试循环，尝试下一个站点
-
-            # 当前站点所有重试都失败
-            logger.warning(f"[{site['name']}] All retries failed for account {account_name}")
-
-            # 如果是账号相关错误，立即尝试其他账号而不是其他站点
-            if account_error:
-                logger.warning(f"Account {account_name} seems to have issues, trying another account...")
-                record_account_failure(account_name)
-                break  # 跳出站点循环，尝试下一个账号
-
-            record_site_failure()
-            tried_sites += 1
-
-        # 如果不是账号错误且所有站点都失败，也记录账号失败
-        if not account_error and tried_sites >= len(SITES):
+        # 所有模型+站点组合都失败
+        if not account_error:
             record_account_failure(account_name)
 
     # 所有账号都失败

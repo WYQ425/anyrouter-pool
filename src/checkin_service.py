@@ -3,20 +3,23 @@ AnyRouter 自动签到服务
 集成到 WAF Proxy 中，支持定时自动签到
 支持多站点故障转移
 
-更新: 使用共享的浏览器管理器，避免重复启动浏览器
+更新 v2: 使用按需创建/销毁的浏览器会话
+- 签到开始时创建浏览器
+- 签到结束后立即销毁
+- 不再依赖常驻浏览器实例
 """
 
 import json
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict
 
 import httpx
 from loguru import logger
 
-# 使用共享的浏览器管理器
-from browser_manager import browser_manager
+# 使用新的浏览器会话管理（按需创建/销毁）
+from browser_manager import BrowserSession
 
 # 邮件通知服务
 from email_service import send_checkin_failure_notification
@@ -65,11 +68,12 @@ def _load_checkin_status():
         try:
             with open(CHECKIN_STATUS_FILE, "r", encoding="utf-8") as f:
                 saved_status = json.load(f)
-                # 只恢复关键字段，不恢复 results（可能很大）
+                # 恢复所有字段，包括 results（保留上次签到详情）
                 checkin_status["last_run"] = saved_status.get("last_run")
                 checkin_status["total_success"] = saved_status.get("total_success", 0)
                 checkin_status["total_failed"] = saved_status.get("total_failed", 0)
-                logger.info(f"Loaded checkin status from file: last_run={checkin_status['last_run']}")
+                checkin_status["results"] = saved_status.get("results", [])
+                logger.info(f"Loaded checkin status from file: last_run={checkin_status['last_run']}, results={len(checkin_status['results'])} accounts")
         except Exception as e:
             logger.warning(f"Failed to load checkin status: {e}")
 
@@ -77,16 +81,17 @@ def _load_checkin_status():
 def _save_checkin_status():
     """保存签到状态到文件（签到后调用）"""
     try:
-        # 只保存关键字段，不保存 results（可能很大）
+        # 保存所有字段，包括 results（重启后可查看上次签到详情）
         save_data = {
             "last_run": checkin_status.get("last_run"),
             "total_success": checkin_status.get("total_success", 0),
             "total_failed": checkin_status.get("total_failed", 0),
+            "results": checkin_status.get("results", []),
             "saved_at": datetime.now().isoformat()
         }
         with open(CHECKIN_STATUS_FILE, "w", encoding="utf-8") as f:
             json.dump(save_data, f, indent=2, ensure_ascii=False)
-        logger.debug(f"Saved checkin status to file")
+        logger.debug(f"Saved checkin status to file: {len(save_data.get('results', []))} results")
     except Exception as e:
         logger.warning(f"Failed to save checkin status: {e}")
 
@@ -108,17 +113,23 @@ def load_accounts():
         return []
 
 
-async def get_waf_cookies_for_checkin():
-    """使用共享浏览器获取 WAF cookies 用于签到"""
-    logger.info("Getting WAF cookies for check-in using shared browser...")
+async def get_waf_cookies_for_checkin() -> Dict[str, str]:
+    """
+    获取 WAF cookies 用于签到
+
+    使用按需创建的浏览器会话，获取完 Cookie 后立即销毁浏览器。
+    """
+    logger.info("Getting WAF cookies for check-in...")
 
     try:
-        # 使用共享的浏览器管理器
         login_url = f"{ANYROUTER_BASE_URL}{LOGIN_PATH}"
-        cookies = await browser_manager.get_page_cookies(
-            url=login_url,
-            wait_time=5000
-        )
+
+        # 使用 BrowserSession 上下文管理器（自动创建和销毁浏览器）
+        async with BrowserSession(use_proxy=True) as session:
+            cookies = await session.get_page_cookies(
+                url=login_url,
+                wait_time=5000
+            )
 
         # 过滤出 WAF 相关的 cookies
         waf_cookies = {
